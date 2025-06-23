@@ -97,6 +97,61 @@ class TestMCPServer:
         assert len(data["results"]) == 1
         assert data["results"][0]["chunk"]["name"] == "test_function"
         assert data["results"][0]["score"] == 0.95
+
+    @patch('src.mcp_server.server.mcp_server.vector_store')
+    @patch('src.mcp_server.server.mcp_server.graph_store')
+    @patch('src.mcp_server.server.mcp_server.embedding_generator')
+    def test_query_endpoint_with_project_filter(self, mock_embedding, mock_graph, mock_vector):
+        """Test query endpoint with project filtering."""
+        # Mock embedding generation
+        mock_embedding.generate_chunk_embeddings.return_value = {
+            'query': [0.1, 0.2, 0.3]
+        }
+
+        # Mock vector search results
+        from src.models import CodeChunk, NodeType
+        mock_chunk = CodeChunk(
+            id="test-chunk-1",
+            content="def test_function():\n    pass",
+            file_path="test.py",
+            start_line=1,
+            end_line=2,
+            node_type=NodeType.FUNCTION,
+            name="test_function",
+            project_id="project-123"
+        )
+
+        mock_vector.search_similar.return_value = [(mock_chunk, 0.95)]
+
+        # Mock graph context
+        mock_graph.get_chunk_context.return_value = {
+            'parents': [],
+            'children': [],
+            'calls': [],
+            'called_by': []
+        }
+
+        query_data = {
+            "query": "find test functions",
+            "limit": 5,
+            "include_context": True,
+            "project_ids": ["project-123", "project-456"]
+        }
+
+        response = self.client.post("/mcp/query", json=query_data)
+        assert response.status_code == 200
+
+        # Verify that search_similar was called with project_ids
+        mock_vector.search_similar.assert_called_once()
+        call_args = mock_vector.search_similar.call_args
+        assert call_args[1]['project_ids'] == ["project-123", "project-456"]
+
+        data = response.json()
+        assert data["query"] == "find test functions"
+        assert data["total_results"] == 1
+        assert len(data["results"]) == 1
+        assert data["results"][0]["chunk"]["name"] == "test_function"
+        assert data["results"][0]["chunk"]["project_id"] == "project-123"
     
     @patch('src.mcp_server.server.mcp_server.graph_store')
     def test_graph_endpoint(self, mock_graph):

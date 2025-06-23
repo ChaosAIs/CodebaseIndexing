@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Any, Tuple
 import uuid
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, KeywordIndexType
+from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 from loguru import logger
 
 from ..models import CodeChunk, QueryResult
@@ -53,19 +53,25 @@ class QdrantVectorStore:
                 self.client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="file_path",
-                    field_schema=models.KeywordIndexParams(type=KeywordIndexType.KEYWORD)
+                    field_schema=models.KeywordIndexParams()
                 )
 
                 self.client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="node_type",
-                    field_schema=models.KeywordIndexParams(type=KeywordIndexType.KEYWORD)
+                    field_schema=models.KeywordIndexParams()
+                )
+
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="project_id",
+                    field_schema=models.KeywordIndexParams()
                 )
 
                 self.client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="name",
-                    field_schema=models.KeywordIndexParams(type=KeywordIndexType.KEYWORD)
+                    field_schema=models.KeywordIndexParams()
                 )
                 
                 logger.info(f"Collection {self.collection_name} created successfully")
@@ -96,6 +102,7 @@ class QdrantVectorStore:
                     "node_type": chunk.node_type.value,
                     "name": chunk.name,
                     "parent_id": chunk.parent_id,
+                    "project_id": chunk.project_id,
                     "calls": chunk.calls,
                     "called_by": chunk.called_by,
                     "imports": chunk.imports,
@@ -127,15 +134,27 @@ class QdrantVectorStore:
             logger.error(f"Error storing chunks in Qdrant: {e}")
             return False
     
-    async def search_similar(self, query_embedding: List[float], limit: int = 10, 
-                           filters: Optional[Dict[str, Any]] = None) -> List[Tuple[CodeChunk, float]]:
+    async def search_similar(self, query_embedding: List[float], limit: int = 10,
+                           filters: Optional[Dict[str, Any]] = None,
+                           project_ids: Optional[List[str]] = None) -> List[Tuple[CodeChunk, float]]:
         """Search for similar chunks using vector similarity."""
         try:
             # Build filter conditions
             filter_conditions = None
+            conditions = []
+
+            # Add project filtering
+            if project_ids:
+                from qdrant_client.http.models import MatchAny
+                conditions.append(
+                    FieldCondition(
+                        key="project_id",
+                        match=MatchAny(any=project_ids)
+                    )
+                )
+
+            # Add other filters
             if filters:
-                conditions = []
-                
                 if "file_path" in filters:
                     conditions.append(
                         FieldCondition(
@@ -143,7 +162,7 @@ class QdrantVectorStore:
                             match=MatchValue(value=filters["file_path"])
                         )
                     )
-                
+
                 if "node_type" in filters:
                     conditions.append(
                         FieldCondition(
@@ -151,7 +170,7 @@ class QdrantVectorStore:
                             match=MatchValue(value=filters["node_type"])
                         )
                     )
-                
+
                 if "name" in filters:
                     conditions.append(
                         FieldCondition(
@@ -159,9 +178,9 @@ class QdrantVectorStore:
                             match=MatchValue(value=filters["name"])
                         )
                     )
-                
-                if conditions:
-                    filter_conditions = Filter(must=conditions)
+
+            if conditions:
+                filter_conditions = Filter(must=conditions)
             
             # Perform search
             search_result = self.client.search(
@@ -186,6 +205,7 @@ class QdrantVectorStore:
                     node_type=payload["node_type"],
                     name=payload.get("name"),
                     parent_id=payload.get("parent_id"),
+                    project_id=payload.get("project_id"),
                     calls=payload.get("calls", []),
                     called_by=payload.get("called_by", []),
                     imports=payload.get("imports", []),
@@ -223,6 +243,7 @@ class QdrantVectorStore:
                 node_type=payload["node_type"],
                 name=payload.get("name"),
                 parent_id=payload.get("parent_id"),
+                project_id=payload.get("project_id"),
                 calls=payload.get("calls", []),
                 called_by=payload.get("called_by", []),
                 imports=payload.get("imports", []),

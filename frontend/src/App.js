@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import GraphVisualization from './components/GraphVisualization';
+import Projects from './components/Projects';
 import StatusPanel from './components/StatusPanel';
 import { apiService } from './services/apiService';
 
@@ -63,23 +64,31 @@ function App() {
 
           <div className="flex-1 overflow-hidden">
             <Routes>
-              <Route path="/" element={<Navigate to="/chat" replace />} />
-              <Route 
-                path="/chat" 
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route
+                path="/projects"
                 element={
-                  <ChatInterface 
+                  <Projects
+                    systemStatus={systemStatus}
+                  />
+                }
+              />
+              <Route
+                path="/chat"
+                element={
+                  <ChatInterface
                     systemStatus={systemStatus}
                     onStatusUpdate={loadSystemStatus}
                   />
-                } 
+                }
               />
-              <Route 
-                path="/graph" 
+              <Route
+                path="/graph"
                 element={
-                  <GraphVisualization 
+                  <GraphVisualization
                     systemStatus={systemStatus}
                   />
-                } 
+                }
               />
             </Routes>
           </div>

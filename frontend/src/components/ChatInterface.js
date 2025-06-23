@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { apiService } from '../services/apiService';
+import ProjectSelector from './ProjectSelector';
+import { usePersistedProjectSelection } from '../hooks/usePersistedState';
 
 const ChatInterface = ({ systemStatus }) => {
   const [messages, setMessages] = useState([]);
@@ -12,9 +14,10 @@ const ChatInterface = ({ systemStatus }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [includeContext, setIncludeContext] = useState(true);
   const [resultLimit, setResultLimit] = useState(10);
+  const [selectedProjectIds, setSelectedProjectIds] = usePersistedProjectSelection();
   const [expandedComponents, setExpandedComponents] = useState({});
   const [expandedResults, setExpandedResults] = useState({});
-  
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -59,7 +62,8 @@ const ChatInterface = ({ systemStatus }) => {
       const response = await apiService.queryCodebase(userMessage.content, {
         model: selectedModel || null,
         limit: resultLimit,
-        includeContext: includeContext
+        includeContext: includeContext,
+        projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
       });
 
       const assistantMessage = {
@@ -476,22 +480,64 @@ const ChatInterface = ({ systemStatus }) => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Embedding Model
-              </label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                <option value="">Default</option>
-                {systemStatus?.available_models?.map((model) => (
-                  <option key={model} value={model}>{model}</option>
-                ))}
-              </select>
+          <div className="space-y-4">
+            {/* Project Selection */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center space-x-2 mb-2">
+                <FolderOpen className="w-4 h-4 text-blue-600" />
+                <label className="block text-sm font-medium text-blue-900">
+                  Project Knowledge Selection
+                </label>
+              </div>
+              <ProjectSelector
+                selectedProjectIds={selectedProjectIds}
+                onSelectionChange={setSelectedProjectIds}
+                className="w-full"
+              />
+              <div className="mt-2 text-xs">
+                {selectedProjectIds.length === 0 ? (
+                  <p className="text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                    ⚠️ No projects selected - searching across all indexed projects
+                  </p>
+                ) : (
+                  <p className="text-blue-600">
+                    ✅ Chat will use knowledge from {selectedProjectIds.length} selected project{selectedProjectIds.length > 1 ? 's' : ''}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-xs text-gray-600">
+                  💡 Select specific projects to focus the chat on relevant codebase knowledge.
+                  Unselected projects will be excluded from search results.
+                </p>
+                {selectedProjectIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProjectIds([])}
+                    className="text-xs text-blue-600 hover:text-blue-800 underline ml-2"
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Embedding Model
+                </label>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">Default</option>
+                  {systemStatus?.available_models?.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -520,6 +566,7 @@ const ChatInterface = ({ systemStatus }) => {
                 />
                 <span className="ml-2 text-sm text-gray-700">Include context</span>
               </label>
+              </div>
             </div>
           </div>
         </div>
@@ -533,10 +580,37 @@ const ChatInterface = ({ systemStatus }) => {
             <h3 className="text-lg font-medium text-gray-900 mb-2">
               Search Your Codebase
             </h3>
-            <p className="text-gray-600 max-w-md mx-auto">
+            <p className="text-gray-600 max-w-md mx-auto mb-4">
               Ask questions about your code using natural language.
               Try queries like "find authentication functions" or "show me error handling code".
             </p>
+
+            {/* Project Selection Status */}
+            <div className="max-w-md mx-auto">
+              {selectedProjectIds.length === 0 ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <div className="flex items-center justify-center space-x-2 text-amber-700">
+                    <FolderOpen className="w-4 h-4" />
+                    <span className="text-sm font-medium">Searching all projects</span>
+                  </div>
+                  <p className="text-xs text-amber-600 mt-1">
+                    Click the settings button to select specific projects
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <div className="flex items-center justify-center space-x-2 text-blue-700">
+                    <FolderOpen className="w-4 h-4" />
+                    <span className="text-sm font-medium">
+                      Searching {selectedProjectIds.length} selected project{selectedProjectIds.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-600 mt-1">
+                    Knowledge limited to selected projects only
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -595,7 +669,15 @@ const ChatInterface = ({ systemStatus }) => {
         </form>
 
         <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
-          <span>Press Enter to send, Shift+Enter for new line</span>
+          <div className="flex items-center space-x-4">
+            <span>Press Enter to send, Shift+Enter for new line</span>
+            {selectedProjectIds.length > 0 && (
+              <div className="flex items-center space-x-1 text-blue-600">
+                <FolderOpen className="w-3 h-3" />
+                <span>{selectedProjectIds.length} project{selectedProjectIds.length > 1 ? 's' : ''} selected</span>
+              </div>
+            )}
+          </div>
           {selectedModel && (
             <span>Using: {selectedModel}</span>
           )}

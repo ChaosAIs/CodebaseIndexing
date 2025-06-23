@@ -45,6 +45,7 @@ class ApiService {
         model: options.model || null,
         limit: options.limit || 10,
         include_context: options.includeContext !== false,
+        project_ids: options.projectIds || null,
       });
       return response.data;
     } catch (error) {
@@ -53,11 +54,14 @@ class ApiService {
   }
 
   // Get graph data
-  async getGraphData(filePath = null, limit = 1000) {
+  async getGraphData(filePath = null, projectIds = null, limit = 1000) {
     try {
       const params = { limit };
       if (filePath) {
         params.file_path = filePath;
+      }
+      if (projectIds && projectIds.length > 0) {
+        params.project_ids = projectIds.join(',');
       }
 
       const response = await this.client.get('/mcp/graph', { params });
@@ -89,6 +93,74 @@ class ApiService {
       return response.data;
     } catch (error) {
       throw this.handleError(error, 'Failed to index codebase');
+    }
+  }
+
+  // Project Management Methods
+
+  // List all projects
+  async listProjects(skip = 0, limit = 100) {
+    try {
+      const response = await this.client.get('/projects', {
+        params: { skip, limit }
+      });
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to list projects');
+    }
+  }
+
+  // Create a new project
+  async createProject(projectData) {
+    try {
+      const response = await this.client.post('/projects', projectData);
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to create project');
+    }
+  }
+
+  // Get project by ID
+  async getProject(projectId) {
+    try {
+      const response = await this.client.get(`/projects/${projectId}`);
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to get project');
+    }
+  }
+
+  // Update project
+  async updateProject(projectId, projectData) {
+    try {
+      const response = await this.client.put(`/projects/${projectId}`, projectData);
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to update project');
+    }
+  }
+
+  // Delete project
+  async deleteProject(projectId) {
+    try {
+      const response = await this.client.delete(`/projects/${projectId}`);
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to delete project');
+    }
+  }
+
+  // Index a project
+  async indexProject(projectId, options = {}) {
+    try {
+      const response = await this.client.post(`/projects/${projectId}/index`, {
+        languages: options.languages || ['python', 'javascript', 'typescript'],
+        embedding_model: options.embeddingModel || null,
+        force_reindex: options.forceReindex || false,
+      });
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to index project');
     }
   }
 
@@ -141,13 +213,39 @@ class ApiService {
   // Format file path for display
   formatFilePath(filePath) {
     if (!filePath) return '';
-    
+
     // Get just the filename and parent directory
     const parts = filePath.split('/');
     if (parts.length > 2) {
       return `.../${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
     }
     return filePath;
+  }
+
+  // File system operations
+  async browseDirectory(path = '', showHidden = false) {
+    try {
+      const params = new URLSearchParams();
+      if (path) params.append('path', path);
+      if (showHidden) params.append('show_hidden', 'true');
+
+      const response = await fetch(`${this.baseURL}/filesystem/browse?${params}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to browse directory:', error);
+      throw error;
+    }
   }
 
   // Format code content for display

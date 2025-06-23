@@ -1,12 +1,19 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MessageSquare, Network, Activity, Database, Cpu } from 'lucide-react';
+import { MessageSquare, Network, Activity, Database, Cpu, FolderOpen } from 'lucide-react';
 
 const Sidebar = ({ systemStatus }) => {
   const navigate = useNavigate();
   const location = useLocation();
 
   const menuItems = [
+    {
+      id: 'projects',
+      label: 'Projects',
+      icon: FolderOpen,
+      path: '/projects',
+      description: 'Manage and index your codebase projects'
+    },
     {
       id: 'chat',
       label: 'Chat Interface',

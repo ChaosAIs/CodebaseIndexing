@@ -15,6 +15,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { apiService } from '../services/apiService';
+import ProjectSelector from './ProjectSelector';
 
 // Register cytoscape extensions
 cytoscape.use(dagre);
@@ -25,6 +26,7 @@ const GraphVisualization = ({ systemStatus }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedFile, setSelectedFile] = useState('');
+  const [selectedProjectIds, setSelectedProjectIds] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [layout, setLayout] = useState('dagre');
@@ -35,7 +37,7 @@ const GraphVisualization = ({ systemStatus }) => {
 
   useEffect(() => {
     loadGraphData();
-  }, [selectedFile, nodeLimit]);
+  }, [selectedFile, selectedProjectIds, nodeLimit]);
 
   useEffect(() => {
     if (graphData && containerRef.current) {
@@ -55,7 +57,11 @@ const GraphVisualization = ({ systemStatus }) => {
     setError(null);
     
     try {
-      const data = await apiService.getGraphData(selectedFile || null, nodeLimit);
+      const data = await apiService.getGraphData(
+        selectedFile || null,
+        selectedProjectIds.length > 0 ? selectedProjectIds : null,
+        nodeLimit
+      );
       setGraphData(data);
     } catch (err) {
       setError(err.message);
@@ -368,22 +374,41 @@ const GraphVisualization = ({ systemStatus }) => {
           {/* Settings Panel */}
           {showSettings && (
             <div className="mt-4 pt-4 border-t border-gray-200">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="space-y-4">
+                {/* Project Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Layout
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Filter by Projects
                   </label>
-                  <select
-                    value={layout}
-                    onChange={(e) => applyLayout(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  >
-                    <option value="dagre">Hierarchical</option>
-                    <option value="cose-bilkent">Force-directed</option>
-                    <option value="circle">Circle</option>
-                    <option value="grid">Grid</option>
-                  </select>
+                  <ProjectSelector
+                    selectedProjectIds={selectedProjectIds}
+                    onSelectionChange={setSelectedProjectIds}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {selectedProjectIds.length === 0
+                      ? 'Showing graph for all indexed projects'
+                      : `Showing graph for ${selectedProjectIds.length} selected project${selectedProjectIds.length > 1 ? 's' : ''}`
+                    }
+                  </p>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Layout
+                    </label>
+                    <select
+                      value={layout}
+                      onChange={(e) => applyLayout(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      <option value="dagre">Hierarchical</option>
+                      <option value="cose-bilkent">Force-directed</option>
+                      <option value="circle">Circle</option>
+                      <option value="grid">Grid</option>
+                    </select>
+                  </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -422,6 +447,7 @@ const GraphVisualization = ({ systemStatus }) => {
                   >
                     Refresh
                   </button>
+                  </div>
                 </div>
               </div>
             </div>

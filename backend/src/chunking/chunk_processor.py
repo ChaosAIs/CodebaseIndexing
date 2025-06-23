@@ -7,6 +7,7 @@ from loguru import logger
 
 from ..models import CodeChunk, NodeType, RelationshipType
 from ..parser.tree_sitter_parser import TreeSitterParser
+from ..parser.simple_parser import SimpleParser
 
 
 class ChunkProcessor:
@@ -15,6 +16,7 @@ class ChunkProcessor:
     def __init__(self):
         """Initialize the chunk processor."""
         self.parser = TreeSitterParser()
+        self.simple_parser = SimpleParser()  # Fallback parser
         self.chunk_registry: Dict[str, CodeChunk] = {}
         self.relationships: Dict[str, Dict[str, List[str]]] = defaultdict(lambda: defaultdict(list))
     
@@ -22,8 +24,11 @@ class ChunkProcessor:
         """Process entire codebase and return structured chunks."""
         logger.info(f"Processing codebase: {directory}")
         
-        # Get all supported files
+        # Get all supported files - try tree-sitter first, fallback to simple parser
         files = self.parser.get_supported_files(directory)
+        if not files:
+            logger.info("Tree-sitter parser found no files, trying simple parser")
+            files = self.simple_parser.get_supported_files(directory)
         logger.info(f"Found {len(files)} supported files")
         
         all_chunks = {}
@@ -32,10 +37,14 @@ class ChunkProcessor:
         # Parse each file
         for file_path in files:
             result = self.parser.parse_file(file_path)
+            if not result:
+                # Try simple parser as fallback
+                result = self.simple_parser.parse_file(file_path)
+
             if result:
                 chunks = result['chunks']
                 call_graph = result['call_graph']
-                
+
                 # Process chunks for this file
                 processed_chunks = self._process_file_chunks(chunks, call_graph, file_path)
                 all_chunks[file_path] = processed_chunks

@@ -12,16 +12,19 @@ load_dotenv()
 
 class DatabaseConfig(BaseSettings):
     """Database configuration settings."""
-    
+
     # Qdrant settings
     qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
     qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
     qdrant_api_key: Optional[str] = Field(default=None, env="QDRANT_API_KEY")
-    
+
     # Neo4j settings
     neo4j_uri: str = Field(default="bolt://localhost:7687", env="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", env="NEO4J_USER")
     neo4j_password: str = Field(default="password", env="NEO4J_PASSWORD")
+
+    # SQLite settings
+    sqlite_path: str = Field(default="data/projects.db", env="SQLITE_PATH")
 
 
 class AIModelConfig(BaseSettings):
@@ -52,10 +55,35 @@ class ServerConfig(BaseSettings):
 
 class IndexingConfig(BaseSettings):
     """Indexing configuration settings."""
-    
+
     max_chunk_size: int = Field(default=1000, env="MAX_CHUNK_SIZE")
     overlap_size: int = Field(default=100, env="OVERLAP_SIZE")
     batch_size: int = Field(default=32, env="BATCH_SIZE")
+
+    # Default directories to exclude from indexing
+    excluded_dirs: set = Field(default_factory=lambda: {
+        'node_modules',      # JavaScript/TypeScript dependencies
+        '__pycache__',       # Python bytecode cache
+        '.git',              # Git repository data
+        '.svn',              # SVN repository data
+        '.hg',               # Mercurial repository data
+        'venv',              # Python virtual environment
+        '.venv',             # Python virtual environment
+        'env',               # Python virtual environment
+        '.env',              # Environment files directory
+        'build',             # Build output
+        'dist',              # Distribution files
+        '.idea',             # JetBrains IDE files
+        '.vscode',           # VS Code settings
+        '.pytest_cache',     # Pytest cache
+        '.mypy_cache',       # MyPy cache
+        '.tox',              # Tox testing
+        'coverage',          # Coverage reports
+        '.coverage',         # Coverage data
+        'htmlcov',           # Coverage HTML reports
+        '.DS_Store',         # macOS system files
+        'Thumbs.db',         # Windows system files
+    })
 
 
 class Config:

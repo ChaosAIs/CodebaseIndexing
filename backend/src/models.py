@@ -1,6 +1,7 @@
 """Data models for the codebase indexing solution."""
 
 from typing import List, Optional, Dict, Any
+from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -26,7 +27,7 @@ class RelationshipType(str, Enum):
 
 class CodeChunk(BaseModel):
     """Represents a chunk of code with metadata."""
-    
+
     id: str = Field(..., description="Unique identifier for the chunk")
     content: str = Field(..., description="Raw code content")
     file_path: str = Field(..., description="Path to the source file")
@@ -35,6 +36,7 @@ class CodeChunk(BaseModel):
     node_type: NodeType = Field(..., description="Type of code node")
     name: Optional[str] = Field(None, description="Name of the function/class/method")
     parent_id: Optional[str] = Field(None, description="ID of parent chunk")
+    project_id: Optional[str] = Field(None, description="ID of the project this chunk belongs to")
     calls: List[str] = Field(default_factory=list, description="IDs of chunks this chunk calls")
     called_by: List[str] = Field(default_factory=list, description="IDs of chunks that call this chunk")
     imports: List[str] = Field(default_factory=list, description="Import statements")
@@ -51,11 +53,12 @@ class EmbeddingModel(str, Enum):
 
 class QueryRequest(BaseModel):
     """Request model for querying the codebase."""
-    
+
     query: str = Field(..., description="Natural language or code query")
     model: Optional[EmbeddingModel] = Field(None, description="Embedding model to use")
     limit: int = Field(default=10, description="Maximum number of results")
     include_context: bool = Field(default=True, description="Include related chunks in results")
+    project_ids: Optional[List[str]] = Field(None, description="Filter results by project IDs")
 
 
 class QueryResult(BaseModel):
@@ -129,8 +132,57 @@ class SystemStatus(BaseModel):
 
 class IndexingRequest(BaseModel):
     """Request model for indexing a codebase."""
-    
+
     path: str = Field(..., description="Path to the codebase")
+    languages: List[str] = Field(default=["python"], description="Programming languages to index")
+    embedding_model: Optional[EmbeddingModel] = Field(None, description="Embedding model to use")
+    force_reindex: bool = Field(default=False, description="Force reindexing of existing files")
+
+
+class ProjectStatus(str, Enum):
+    """Project indexing status."""
+    NOT_INDEXED = "not_indexed"
+    INDEXING = "indexing"
+    INDEXED = "indexed"
+    ERROR = "error"
+
+
+class ProjectCreate(BaseModel):
+    """Request model for creating a project."""
+
+    name: str = Field(..., description="Project name", min_length=1, max_length=100)
+    description: Optional[str] = Field(None, description="Project description", max_length=500)
+    source_path: str = Field(..., description="Path to the project source code")
+
+
+class ProjectUpdate(BaseModel):
+    """Request model for updating a project."""
+
+    name: Optional[str] = Field(None, description="Project name", min_length=1, max_length=100)
+    description: Optional[str] = Field(None, description="Project description", max_length=500)
+    source_path: Optional[str] = Field(None, description="Path to the project source code")
+
+
+class Project(BaseModel):
+    """Project model."""
+
+    id: str = Field(..., description="Unique project identifier")
+    name: str = Field(..., description="Project name")
+    description: Optional[str] = Field(None, description="Project description")
+    source_path: str = Field(..., description="Path to the project source code")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    indexed_at: Optional[datetime] = Field(None, description="Last indexing timestamp")
+    status: ProjectStatus = Field(..., description="Project indexing status")
+    total_files: int = Field(default=0, description="Total number of indexed files")
+    total_chunks: int = Field(default=0, description="Total number of indexed chunks")
+    embedding_model: Optional[str] = Field(None, description="Embedding model used for indexing")
+    indexing_error: Optional[str] = Field(None, description="Last indexing error message")
+
+
+class ProjectIndexRequest(BaseModel):
+    """Request model for indexing a project."""
+
     languages: List[str] = Field(default=["python"], description="Programming languages to index")
     embedding_model: Optional[EmbeddingModel] = Field(None, description="Embedding model to use")
     force_reindex: bool = Field(default=False, description="Force reindexing of existing files")

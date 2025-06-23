@@ -103,6 +103,7 @@ class Neo4jGraphStore:
                             c.node_type = $node_type,
                             c.name = $name,
                             c.parent_id = $parent_id,
+                            c.project_id = $project_id,
                             c.calls = $calls,
                             c.called_by = $called_by,
                             c.imports = $imports,
@@ -116,6 +117,7 @@ class Neo4jGraphStore:
                         "node_type": chunk.node_type.value,
                         "name": chunk.name,
                         "parent_id": chunk.parent_id,
+                        "project_id": chunk.project_id,
                         "calls": chunk.calls,
                         "called_by": chunk.called_by,
                         "imports": chunk.imports,
@@ -223,35 +225,39 @@ class Neo4jGraphStore:
             logger.error(f"Error getting chunk context: {e}")
             return {}
     
-    async def get_graph_data(self, file_path: Optional[str] = None, limit: int = 1000) -> GraphData:
+    async def get_graph_data(self, file_path: Optional[str] = None, project_ids: Optional[List[str]] = None, limit: int = 1000) -> GraphData:
         """Get graph data for visualization."""
         try:
             with self.driver.session() as session:
                 # Build query based on filters
+                where_conditions = []
+                params = {"limit": limit}
+
                 if file_path:
-                    node_query = """
-                        MATCH (c:Chunk {file_path: $file_path})
-                        RETURN c
-                        LIMIT $limit
-                    """
-                    edge_query = """
-                        MATCH (c1:Chunk {file_path: $file_path})-[r]->(c2:Chunk)
-                        RETURN c1.id as source, c2.id as target, type(r) as rel_type, r.weight as weight
-                        LIMIT $limit
-                    """
-                    params = {"file_path": file_path, "limit": limit}
-                else:
-                    node_query = """
-                        MATCH (c:Chunk)
-                        RETURN c
-                        LIMIT $limit
-                    """
-                    edge_query = """
-                        MATCH (c1:Chunk)-[r]->(c2:Chunk)
-                        RETURN c1.id as source, c2.id as target, type(r) as rel_type, r.weight as weight
-                        LIMIT $limit
-                    """
-                    params = {"limit": limit}
+                    where_conditions.append("c.file_path = $file_path")
+                    params["file_path"] = file_path
+
+                if project_ids:
+                    where_conditions.append("c.project_id IN $project_ids")
+                    params["project_ids"] = project_ids
+
+                where_clause = " AND ".join(where_conditions)
+                if where_clause:
+                    where_clause = "WHERE " + where_clause
+
+                node_query = f"""
+                    MATCH (c:Chunk)
+                    {where_clause}
+                    RETURN c
+                    LIMIT $limit
+                """
+
+                edge_query = f"""
+                    MATCH (c1:Chunk)-[r]->(c2:Chunk)
+                    {where_clause.replace('c.', 'c1.') if where_clause else ''}
+                    RETURN c1.id as source, c2.id as target, type(r) as rel_type, r.weight as weight
+                    LIMIT $limit
+                """
                 
                 # Get nodes
                 nodes = []
@@ -308,6 +314,7 @@ class Neo4jGraphStore:
             node_type=record_data["node_type"],
             name=record_data.get("name"),
             parent_id=record_data.get("parent_id"),
+            project_id=record_data.get("project_id"),
             calls=record_data.get("calls", []),
             called_by=record_data.get("called_by", []),
             imports=record_data.get("imports", []),

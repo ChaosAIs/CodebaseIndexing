@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from src.parser.tree_sitter_parser import TreeSitterParser
+from src.parser.simple_parser import SimpleParser
 from src.models import NodeType
 
 
@@ -187,3 +188,108 @@ module.exports = { config, getConfig };
         languages = [result['language'] for result in all_results]
         assert 'python' in languages
         assert 'javascript' in languages
+
+
+@pytest.mark.asyncio
+async def test_node_modules_exclusion():
+    """Test that node_modules and other excluded directories are ignored."""
+    parser = TreeSitterParser()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create main source files
+        (Path(temp_dir) / "main.js").write_text('''
+function main() {
+    console.log("Main application");
+}
+''')
+        (Path(temp_dir) / "utils.py").write_text('''
+def utility_function():
+    return "utility"
+''')
+
+        # Create node_modules directory with files that should be excluded
+        node_modules_dir = Path(temp_dir) / "node_modules"
+        node_modules_dir.mkdir()
+        (node_modules_dir / "react" / "index.js").parent.mkdir(parents=True)
+        (node_modules_dir / "react" / "index.js").write_text('''
+// This should be excluded from indexing
+module.exports = require('./lib/React');
+''')
+        (node_modules_dir / "lodash" / "lodash.js").parent.mkdir(parents=True)
+        (node_modules_dir / "lodash" / "lodash.js").write_text('''
+// This should also be excluded
+function _() { return {}; }
+''')
+
+        # Create other excluded directories
+        excluded_dirs = ['__pycache__', '.git', 'venv', 'build', 'dist']
+        for excluded_dir in excluded_dirs:
+            excluded_path = Path(temp_dir) / excluded_dir
+            excluded_path.mkdir()
+            (excluded_path / "excluded_file.py").write_text("# This should be excluded")
+
+        # Get supported files
+        supported_files = parser.get_supported_files(temp_dir)
+
+        # Should only find the main source files, not the excluded ones
+        assert len(supported_files) == 2
+
+        # Verify the correct files are found
+        file_names = [Path(f).name for f in supported_files]
+        assert "main.js" in file_names
+        assert "utils.py" in file_names
+
+        # Verify no files from excluded directories are found
+        for file_path in supported_files:
+            assert "node_modules" not in file_path
+            assert "__pycache__" not in file_path
+            assert ".git" not in file_path
+            assert "venv" not in file_path
+            assert "build" not in file_path
+            assert "dist" not in file_path
+
+
+@pytest.mark.asyncio
+async def test_simple_parser_node_modules_exclusion():
+    """Test that SimpleParser also excludes node_modules and other directories."""
+    parser = SimpleParser()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create main source files
+        (Path(temp_dir) / "main.ts").write_text('''
+class MainApp {
+    run() {
+        console.log("Running app");
+    }
+}
+''')
+        (Path(temp_dir) / "helper.py").write_text('''
+def helper():
+    return "help"
+''')
+
+        # Create node_modules with TypeScript/JavaScript files
+        node_modules_dir = Path(temp_dir) / "node_modules"
+        node_modules_dir.mkdir()
+        (node_modules_dir / "@types" / "node" / "index.d.ts").parent.mkdir(parents=True)
+        (node_modules_dir / "@types" / "node" / "index.d.ts").write_text('''
+// TypeScript definitions - should be excluded
+declare module "fs" {
+    export function readFile(path: string): string;
+}
+''')
+
+        # Get supported files
+        supported_files = parser.get_supported_files(temp_dir)
+
+        # Should only find the main source files
+        assert len(supported_files) == 2
+
+        # Verify correct files are found
+        file_names = [Path(f).name for f in supported_files]
+        assert "main.ts" in file_names
+        assert "helper.py" in file_names
+
+        # Verify no node_modules files are included
+        for file_path in supported_files:
+            assert "node_modules" not in file_path
