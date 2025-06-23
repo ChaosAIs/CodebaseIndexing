@@ -13,6 +13,7 @@ const ChatInterface = ({ systemStatus }) => {
   const [includeContext, setIncludeContext] = useState(true);
   const [resultLimit, setResultLimit] = useState(10);
   const [expandedComponents, setExpandedComponents] = useState({});
+  const [expandedResults, setExpandedResults] = useState({});
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -30,6 +31,13 @@ const ChatInterface = ({ systemStatus }) => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleExpandResults = (messageId) => {
+    setExpandedResults(prev => ({
+      ...prev,
+      [messageId]: !prev[messageId]
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -336,7 +344,7 @@ const ChatInterface = ({ systemStatus }) => {
                   </h3>
                 </div>
                 <div className="p-4 space-y-4">
-                  {message.content.results.slice(0, 3).map((result, index) => (
+                  {message.content.results.slice(0, expandedResults[message.id] ? message.content.results.length : 3).map((result, index) => (
                     <div key={index} className="border border-gray-200 rounded-lg overflow-hidden">
                       {/* Result Header */}
                       <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
@@ -406,11 +414,27 @@ const ChatInterface = ({ systemStatus }) => {
                     </div>
                   ))}
 
-                  {message.content.results.length > 3 && (
+                  {message.content.results.length > 3 && !expandedResults[message.id] && (
                     <div className="text-center py-2">
-                      <span className="text-sm text-gray-500">
-                        +{message.content.results.length - 3} more results available
-                      </span>
+                      <button
+                        onClick={() => handleExpandResults(message.id)}
+                        className="inline-flex items-center space-x-1 text-sm text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:underline transition-colors"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                        <span>+{message.content.results.length - 3} more results available</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {message.content.results.length > 3 && expandedResults[message.id] && (
+                    <div className="text-center py-2">
+                      <button
+                        onClick={() => handleExpandResults(message.id)}
+                        className="inline-flex items-center space-x-1 text-sm text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:underline transition-colors"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                        <span>Show fewer results</span>
+                      </button>
                     </div>
                   )}
                 </div>
