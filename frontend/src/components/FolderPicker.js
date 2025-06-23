@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, FolderOpen, HardDrive, ChevronRight, Home } from 'lucide-react';
+import { X, Folder, HardDrive, ChevronRight, Home, RefreshCw, FileText, User } from 'lucide-react';
 import { apiService } from '../services/apiService';
 
 const FolderPicker = ({ isOpen, onClose, onSelect, initialPath = '' }) => {
@@ -11,7 +11,13 @@ const FolderPicker = ({ isOpen, onClose, onSelect, initialPath = '' }) => {
 
   useEffect(() => {
     if (isOpen) {
-      loadDirectory(initialPath);
+      // If no initial path provided, try to start from a sensible default
+      if (!initialPath) {
+        // Start from drives/root on first open
+        loadDirectory('');
+      } else {
+        loadDirectory(initialPath);
+      }
     }
   }, [isOpen, initialPath]);
 
@@ -56,11 +62,31 @@ const FolderPicker = ({ isOpen, onClose, onSelect, initialPath = '' }) => {
     }
   };
 
+  const handleGoHome = () => {
+    const homeDir = process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME;
+    if (homeDir) {
+      loadDirectory(homeDir);
+    } else {
+      // Fallback to root/drives
+      loadDirectory('');
+    }
+  };
+
+  const handleRefresh = () => {
+    loadDirectory(currentPath);
+  };
+
   const getItemIcon = (item) => {
     if (item.type === 'drive') {
       return <HardDrive className="w-4 h-4 text-blue-500" />;
     } else if (item.type === 'parent') {
       return <ChevronRight className="w-4 h-4 text-gray-500 transform rotate-180" />;
+    } else if (item.type === 'home') {
+      return <Home className="w-4 h-4 text-green-500" />;
+    } else if (item.type === 'desktop') {
+      return <User className="w-4 h-4 text-purple-500" />;
+    } else if (item.type === 'documents') {
+      return <FileText className="w-4 h-4 text-orange-500" />;
     } else if (item.is_directory) {
       return <Folder className="w-4 h-4 text-blue-500" />;
     } else {
@@ -93,11 +119,30 @@ const FolderPicker = ({ isOpen, onClose, onSelect, initialPath = '' }) => {
           </button>
         </div>
 
-        {/* Current Path */}
+        {/* Navigation Bar */}
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-200">
-          <div className="flex items-center space-x-2 text-sm text-gray-600">
-            <Home className="w-4 h-4" />
-            <span className="truncate">{formatPath(currentPath)}</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-sm text-gray-600 flex-1 min-w-0">
+              <Home className="w-4 h-4 flex-shrink-0" />
+              <span className="truncate">{formatPath(currentPath)}</span>
+            </div>
+            <div className="flex items-center space-x-2 ml-4">
+              <button
+                onClick={handleGoHome}
+                className="p-1 hover:bg-gray-200 rounded"
+                title="Go to Home Directory"
+              >
+                <Home className="w-4 h-4 text-gray-500" />
+              </button>
+              <button
+                onClick={handleRefresh}
+                className="p-1 hover:bg-gray-200 rounded"
+                title="Refresh"
+                disabled={loading}
+              >
+                <RefreshCw className={`w-4 h-4 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -108,8 +153,17 @@ const FolderPicker = ({ isOpen, onClose, onSelect, initialPath = '' }) => {
               <div className="text-gray-500">Loading...</div>
             </div>
           ) : error ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="text-red-600">Error: {error}</div>
+            <div className="flex flex-col items-center justify-center py-8 space-y-4">
+              <div className="text-red-600 text-center">
+                <div className="font-medium">Unable to access directory</div>
+                <div className="text-sm mt-1">{error}</div>
+              </div>
+              <button
+                onClick={() => loadDirectory('')}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Go to Root
+              </button>
             </div>
           ) : items.length === 0 ? (
             <div className="flex items-center justify-center py-8">

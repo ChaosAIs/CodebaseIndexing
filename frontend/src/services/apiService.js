@@ -229,7 +229,7 @@ class ApiService {
       if (path) params.append('path', path);
       if (showHidden) params.append('show_hidden', 'true');
 
-      const response = await fetch(`${this.baseURL}/filesystem/browse?${params}`, {
+      const response = await fetch(`${API_BASE_URL}/filesystem/browse?${params}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

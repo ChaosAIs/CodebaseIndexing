@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react';
+import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen, X } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { apiService } from '../services/apiService';
@@ -17,6 +17,7 @@ const ChatInterface = ({ systemStatus }) => {
   const [selectedProjectIds, setSelectedProjectIds] = usePersistedProjectSelection();
   const [expandedComponents, setExpandedComponents] = useState({});
   const [expandedResults, setExpandedResults] = useState({});
+  const [projects, setProjects] = useState([]);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -24,6 +25,19 @@ const ChatInterface = ({ systemStatus }) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load projects for name mapping
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        const projectList = await apiService.listProjects();
+        setProjects(projectList);
+      } catch (error) {
+        console.error('Failed to load projects:', error);
+      }
+    };
+    loadProjects();
+  }, []);
 
   useEffect(() => {
     // Set default model when system status loads
@@ -34,6 +48,12 @@ const ChatInterface = ({ systemStatus }) => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // Get selected project names for display
+  const getSelectedProjectNames = () => {
+    const selectedProjects = projects.filter(p => selectedProjectIds.includes(p.id));
+    return selectedProjects.map(p => p.name);
   };
 
   const handleExpandResults = (messageId) => {
@@ -574,6 +594,42 @@ const ChatInterface = ({ systemStatus }) => {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
+        {/* Selected Projects Display */}
+        {selectedProjectIds.length > 0 && (
+          <div className="mb-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <FolderOpen className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-blue-900">
+                    Active Projects:
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedProjectIds([])}
+                  className="text-blue-600 hover:text-blue-800 p-1 rounded transition-colors"
+                  title="Clear project selection"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {getSelectedProjectNames().map((projectName, index) => (
+                  <span
+                    key={index}
+                    className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                  >
+                    {projectName}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-blue-600 mt-2">
+                Chat responses will be limited to knowledge from these projects only
+              </p>
+            </div>
+          </div>
+        )}
+
         {messages.length === 0 && (
           <div className="text-center py-12">
             <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
