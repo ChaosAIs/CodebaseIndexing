@@ -775,21 +775,18 @@ Be specific and technical, as if you're a senior architect explaining the system
                 summary=summary,
                 detailed_explanation=analysis_text,
                 code_flow=[
-                    "Parse source code using Tree-sitter",
-                    "Generate embeddings and store in Qdrant",
-                    "Model relationships in Neo4j graph",
-                    "Process queries through MCP server"
+                    "System architecture analysis based on discovered components",
+                    "Dynamic component categorization and relationship mapping",
+                    "Intelligent query processing and response generation"
                 ],
                 key_components=[
-                    {"name": "Tree-sitter Parser", "purpose": "AST extraction and code parsing", "location": "parsing layer"},
-                    {"name": "Qdrant Vector Store", "purpose": "Semantic search and similarity matching", "location": "storage layer"},
-                    {"name": "Neo4j Graph Store", "purpose": "Relationship modeling and graph traversal", "location": "storage layer"},
-                    {"name": "MCP Server", "purpose": "API endpoints and LLM integration", "location": "service layer"}
+                    {"name": "Dynamic Architecture Discovery", "purpose": "Automatically discovers system architecture patterns", "location": "analysis layer"},
+                    {"name": "Intelligent Query Processor", "purpose": "Processes abstract and technical queries", "location": "query layer"},
+                    {"name": "Adaptive Response Generator", "purpose": "Generates contextual responses based on discovered patterns", "location": "response layer"}
                 ],
                 relationships=[
-                    {"from": "Parser", "to": "Chunk Processor", "relationship": "feeds_data", "context": "AST nodes become code chunks"},
-                    {"from": "Chunk Processor", "to": "Vector Store", "relationship": "stores_embeddings", "context": "Chunks converted to vectors"},
-                    {"from": "Vector Store", "to": "Graph Store", "relationship": "complements", "context": "Hybrid search approach"}
+                    {"from": "Query Processor", "to": "Architecture Discovery", "relationship": "triggers_analysis", "context": "Query analysis drives architecture discovery"},
+                    {"from": "Architecture Discovery", "to": "Response Generator", "relationship": "provides_context", "context": "Discovered patterns inform response generation"}
                 ],
                 recommendations=self._generate_abstract_recommendations(query, intent)
             )

@@ -454,55 +454,186 @@ Respond naturally and conversationally. Do not use rigid sections like "Analysis
             "summary": summary,
             "detailed_explanation": self._generate_detailed_explanation(query, chunks, system_components, file_paths),
             "code_flow": self._generate_code_flow(chunks, system_components),
-            "key_components": [
-                {
-                    "name": chunk.name or f"Code block at line {chunk.start_line}",
-                    "purpose": self._determine_component_purpose(chunk, system_components),
-                    "location": f"{chunk.file_path}:{chunk.start_line}"
-                } for chunk in chunks[:5]
-            ],
+            "key_components": self._discover_key_components(chunks, system_components),
             "relationships": self._infer_relationships(chunks),
             "recommendations": self._generate_contextual_recommendations(query, system_components)
         }
 
     def _categorize_system_components(self, chunks: List[CodeChunk]) -> Dict[str, List[CodeChunk]]:
-        """Categorize code chunks by their role in the indexing system."""
-        categories = {
-            "parsing": [],
-            "chunking": [],
-            "embedding": [],
-            "storage": [],
-            "search": [],
-            "api": [],
-            "frontend": [],
-            "analysis": [],
-            "other": []
+        """Dynamically categorize code chunks by analyzing their actual content and structure."""
+        # Start with discovered categories instead of predefined ones
+        categories = {}
+
+        # Analyze each chunk to understand its role
+        for chunk in chunks:
+            category = self._discover_component_category(chunk)
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(chunk)
+
+        return categories
+
+    def _discover_component_category(self, chunk: CodeChunk) -> str:
+        """
+        Intelligently discover what category a component belongs to based on:
+        1. File path patterns
+        2. Code content analysis
+        3. Function/class names
+        4. Import statements
+        5. Code patterns
+        """
+        file_path = chunk.file_path.lower()
+        content = chunk.content.lower()
+        name = (chunk.name or "").lower()
+
+        # Analyze imports to understand dependencies
+        imports = self._extract_imports_from_content(chunk.content)
+
+        # File path analysis - more flexible pattern matching
+        path_indicators = self._analyze_file_path_patterns(file_path)
+
+        # Content analysis - look for specific patterns
+        content_indicators = self._analyze_content_patterns(content, name)
+
+        # Import analysis - understand external dependencies
+        import_indicators = self._analyze_import_patterns(imports)
+
+        # Combine all indicators to determine category
+        all_indicators = {**path_indicators, **content_indicators, **import_indicators}
+
+        # Find the category with highest confidence
+        if all_indicators:
+            best_category = max(all_indicators, key=all_indicators.get)
+            confidence = all_indicators[best_category]
+
+            # Only return if confidence is reasonable
+            if confidence >= 0.3:
+                return best_category
+
+        # Fallback to generic categorization
+        return self._generic_categorization(file_path, content, name)
+
+    def _analyze_file_path_patterns(self, file_path: str) -> Dict[str, float]:
+        """Analyze file path to determine component category."""
+        indicators = {}
+
+        # Common architectural patterns
+        patterns = {
+            "data_access": ["repository", "dao", "database", "db", "storage", "store"],
+            "business_logic": ["service", "business", "logic", "domain", "core"],
+            "api_layer": ["api", "controller", "endpoint", "route", "handler"],
+            "ui_layer": ["ui", "frontend", "component", "view", "page", "interface"],
+            "infrastructure": ["config", "util", "helper", "common", "shared"],
+            "data_processing": ["processor", "parser", "transformer", "converter"],
+            "communication": ["client", "server", "gateway", "proxy"],
+            "security": ["auth", "security", "permission", "access"],
+            "monitoring": ["log", "monitor", "metric", "health", "diagnostic"]
         }
 
-        for chunk in chunks:
-            file_path = chunk.file_path.lower()
-            chunk_content = chunk.content.lower()
+        for category, keywords in patterns.items():
+            score = sum(1.0 for keyword in keywords if keyword in file_path)
+            if score > 0:
+                indicators[category] = score / len(keywords)  # Normalize
 
-            if any(keyword in file_path for keyword in ["parser", "tree_sitter", "ast"]):
-                categories["parsing"].append(chunk)
-            elif any(keyword in file_path for keyword in ["chunk", "processor"]):
-                categories["chunking"].append(chunk)
-            elif any(keyword in file_path for keyword in ["embedding", "embed"]):
-                categories["embedding"].append(chunk)
-            elif any(keyword in file_path for keyword in ["qdrant", "neo4j", "database", "storage"]):
-                categories["storage"].append(chunk)
-            elif any(keyword in file_path for keyword in ["search", "query", "retrieval"]):
-                categories["search"].append(chunk)
-            elif any(keyword in file_path for keyword in ["server", "api", "mcp", "fastapi"]):
-                categories["api"].append(chunk)
-            elif any(keyword in file_path for keyword in ["frontend", "react", "component", "interface"]):
-                categories["frontend"].append(chunk)
-            elif any(keyword in file_path for keyword in ["analysis", "analyzer"]):
-                categories["analysis"].append(chunk)
+        return indicators
+
+    def _analyze_content_patterns(self, content: str, name: str) -> Dict[str, float]:
+        """Analyze code content to determine component category."""
+        indicators = {}
+
+        # Look for specific code patterns
+        patterns = {
+            "data_access": [
+                "select", "insert", "update", "delete", "query", "connection",
+                "database", "table", "collection", "repository"
+            ],
+            "api_layer": [
+                "request", "response", "endpoint", "route", "handler",
+                "get", "post", "put", "delete", "api"
+            ],
+            "business_logic": [
+                "calculate", "process", "validate", "transform", "business",
+                "rule", "logic", "algorithm"
+            ],
+            "ui_layer": [
+                "render", "component", "props", "state", "event",
+                "click", "submit", "form", "button"
+            ],
+            "data_processing": [
+                "parse", "transform", "convert", "process", "extract",
+                "chunk", "embed", "index"
+            ],
+            "communication": [
+                "client", "server", "request", "response", "http",
+                "websocket", "grpc", "rest"
+            ],
+            "security": [
+                "authenticate", "authorize", "permission", "token",
+                "encrypt", "decrypt", "hash", "validate"
+            ]
+        }
+
+        for category, keywords in patterns.items():
+            score = sum(0.5 for keyword in keywords if keyword in content)
+            score += sum(1.0 for keyword in keywords if keyword in name)
+            if score > 0:
+                indicators[category] = min(score / len(keywords), 1.0)  # Normalize and cap
+
+        return indicators
+
+    def _analyze_import_patterns(self, imports: List[str]) -> Dict[str, float]:
+        """Analyze import statements to determine component category."""
+        indicators = {}
+
+        import_patterns = {
+            "data_access": ["sqlite", "postgres", "mysql", "mongodb", "redis", "qdrant", "neo4j"],
+            "api_layer": ["fastapi", "flask", "django", "express", "axios"],
+            "ui_layer": ["react", "vue", "angular", "svelte", "jquery"],
+            "data_processing": ["pandas", "numpy", "sklearn", "torch", "transformers"],
+            "communication": ["requests", "httpx", "aiohttp", "websockets"],
+            "security": ["jwt", "bcrypt", "cryptography", "oauth"],
+            "infrastructure": ["logging", "config", "os", "sys", "pathlib"]
+        }
+
+        for category, packages in import_patterns.items():
+            score = sum(1.0 for imp in imports for pkg in packages if pkg in imp.lower())
+            if score > 0:
+                indicators[category] = min(score / len(packages), 1.0)
+
+        return indicators
+
+    def _extract_imports_from_content(self, content: str) -> List[str]:
+        """Extract import statements from code content."""
+        import re
+        imports = []
+
+        # Python imports
+        python_imports = re.findall(r'(?:from\s+(\S+)\s+import|import\s+(\S+))', content)
+        for match in python_imports:
+            imports.extend([imp for imp in match if imp])
+
+        # JavaScript/TypeScript imports
+        js_imports = re.findall(r'import.*?from\s+[\'"]([^\'"]+)[\'"]', content)
+        imports.extend(js_imports)
+
+        return imports
+
+    def _generic_categorization(self, file_path: str, content: str, name: str) -> str:
+        """Fallback categorization when specific patterns aren't found."""
+        # Use file extension and basic patterns
+        if any(ext in file_path for ext in [".py", ".js", ".ts"]):
+            if "test" in file_path or "spec" in file_path:
+                return "testing"
+            elif "config" in file_path or "setting" in file_path:
+                return "configuration"
+            elif "util" in file_path or "helper" in file_path:
+                return "utilities"
+            elif "model" in file_path or "schema" in file_path:
+                return "data_models"
             else:
-                categories["other"].append(chunk)
+                return "application_logic"
 
-        return {k: v for k, v in categories.items() if v}  # Remove empty categories
+        return "miscellaneous"
 
     def _generate_contextual_summary(self, query: str, chunks: List[CodeChunk], system_components: Dict[str, List[CodeChunk]]) -> str:
         """Generate a natural, question-specific response."""
@@ -558,21 +689,264 @@ Respond naturally and conversationally. Do not use rigid sections like "Analysis
         return " ".join(explanations) if explanations else f"The identified components span {len(file_paths)} files in the codebase indexing system."
 
     def _generate_code_flow(self, chunks: List[CodeChunk], system_components: Dict[str, List[CodeChunk]]) -> List[str]:
-        """Generate code flow based on system pipeline."""
+        """Dynamically generate code flow based on discovered system architecture."""
         flow_steps = []
 
-        if "parsing" in system_components:
-            flow_steps.append("Parse source code using Tree-sitter to extract AST nodes")
-        if "chunking" in system_components:
-            flow_steps.append("Process AST into meaningful code chunks with metadata")
-        if "embedding" in system_components:
-            flow_steps.append("Generate vector embeddings for semantic search")
-        if "storage" in system_components:
-            flow_steps.append("Store embeddings in Qdrant and relationships in Neo4j")
-        if "search" in system_components:
-            flow_steps.append("Process queries and retrieve relevant code chunks")
+        # Analyze the actual components to understand the flow
+        component_flow = self._discover_system_flow(system_components, chunks)
 
-        return flow_steps[:3] if flow_steps else [f"Execute {chunk.name or 'function'}" for chunk in chunks[:3]]
+        if component_flow:
+            return component_flow
+
+        # Fallback: generate flow from individual chunks
+        return self._generate_chunk_based_flow(chunks)
+
+    def _discover_system_flow(self, system_components: Dict[str, List[CodeChunk]], chunks: List[CodeChunk]) -> List[str]:
+        """Discover the actual system flow by analyzing component relationships."""
+        flow_steps = []
+
+        # Common architectural flow patterns
+        flow_patterns = {
+            "data_input": ["Input/Parse", "data_processing", "data_access"],
+            "data_processing": ["Process/Transform", "business_logic", "data_processing"],
+            "data_storage": ["Store/Persist", "data_access", "infrastructure"],
+            "api_handling": ["Handle Requests", "api_layer", "communication"],
+            "business_execution": ["Execute Logic", "business_logic", "application_logic"],
+            "data_output": ["Output/Response", "api_layer", "ui_layer"]
+        }
+
+        # Find which patterns exist in the system
+        existing_patterns = []
+        for pattern_name, (description, *categories) in flow_patterns.items():
+            if any(cat in system_components for cat in categories):
+                existing_patterns.append((pattern_name, description))
+
+        # Build flow based on discovered patterns
+        if existing_patterns:
+            # Sort by logical flow order
+            flow_order = ["data_input", "data_processing", "business_execution", "data_storage", "api_handling", "data_output"]
+            sorted_patterns = sorted(existing_patterns, key=lambda x: flow_order.index(x[0]) if x[0] in flow_order else 999)
+
+            for _, description in sorted_patterns:
+                flow_steps.append(description)
+
+        return flow_steps[:5]  # Limit to 5 steps
+
+    def _generate_chunk_based_flow(self, chunks: List[CodeChunk]) -> List[str]:
+        """Generate flow based on individual chunk analysis."""
+        flow_steps = []
+
+        for chunk in chunks[:3]:
+            if chunk.name:
+                # Analyze function/class name to understand its role
+                name_lower = chunk.name.lower()
+
+                if any(word in name_lower for word in ["parse", "extract", "read"]):
+                    flow_steps.append(f"Parse/Extract data using {chunk.name}")
+                elif any(word in name_lower for word in ["process", "transform", "convert"]):
+                    flow_steps.append(f"Process/Transform data with {chunk.name}")
+                elif any(word in name_lower for word in ["store", "save", "persist"]):
+                    flow_steps.append(f"Store/Persist data via {chunk.name}")
+                elif any(word in name_lower for word in ["search", "find", "query"]):
+                    flow_steps.append(f"Search/Query data using {chunk.name}")
+                elif any(word in name_lower for word in ["handle", "manage", "control"]):
+                    flow_steps.append(f"Handle/Manage operations with {chunk.name}")
+                else:
+                    flow_steps.append(f"Execute {chunk.name} functionality")
+            else:
+                # Analyze content for clues
+                content_lower = chunk.content.lower()
+                if "def " in content_lower or "function" in content_lower:
+                    flow_steps.append(f"Execute function at {chunk.file_path}:{chunk.start_line}")
+                elif "class " in content_lower:
+                    flow_steps.append(f"Instantiate class at {chunk.file_path}:{chunk.start_line}")
+                else:
+                    flow_steps.append(f"Process code block at {chunk.file_path}:{chunk.start_line}")
+
+        return flow_steps
+
+    def _discover_key_components(self, chunks: List[CodeChunk], system_components: Dict[str, List[CodeChunk]]) -> List[Dict[str, str]]:
+        """Dynamically discover key components based on actual code analysis."""
+        key_components = []
+
+        # Analyze chunks to find the most important ones
+        scored_chunks = []
+        for chunk in chunks[:10]:  # Analyze top 10 chunks
+            score = self._calculate_component_importance(chunk, system_components)
+            scored_chunks.append((chunk, score))
+
+        # Sort by importance score
+        scored_chunks.sort(key=lambda x: x[1], reverse=True)
+
+        # Build key components list
+        for chunk, score in scored_chunks[:5]:  # Top 5 components
+            component = {
+                "name": self._get_component_display_name(chunk),
+                "purpose": self._discover_component_purpose(chunk, system_components),
+                "location": f"{chunk.file_path}:{chunk.start_line}",
+                "importance_score": round(score, 2)
+            }
+            key_components.append(component)
+
+        return key_components
+
+    def _calculate_component_importance(self, chunk: CodeChunk, system_components: Dict[str, List[CodeChunk]]) -> float:
+        """Calculate importance score for a component."""
+        score = 0.0
+
+        # Base score from chunk type
+        type_scores = {
+            "class": 1.0,
+            "function": 0.8,
+            "method": 0.7,
+            "module": 0.9,
+            "interface": 0.8
+        }
+        score += type_scores.get(chunk.node_type.value, 0.5)
+
+        # Boost for main/entry point files
+        file_path = chunk.file_path.lower()
+        if any(name in file_path for name in ["main", "app", "index", "server", "__init__"]):
+            score += 0.5
+
+        # Boost for core functionality indicators
+        name = (chunk.name or "").lower()
+        content = chunk.content.lower()
+
+        core_indicators = ["manager", "processor", "handler", "controller", "service", "client", "server"]
+        if any(indicator in name for indicator in core_indicators):
+            score += 0.3
+
+        # Boost for components that appear in multiple categories
+        component_categories = []
+        for category, category_chunks in system_components.items():
+            if chunk in category_chunks:
+                component_categories.append(category)
+
+        if len(component_categories) > 1:
+            score += 0.2 * len(component_categories)
+
+        # Boost for components with many relationships (calls, imports)
+        if hasattr(chunk, 'calls') and chunk.calls:
+            score += min(len(chunk.calls) * 0.1, 0.3)
+
+        if hasattr(chunk, 'called_by') and chunk.called_by:
+            score += min(len(chunk.called_by) * 0.1, 0.3)
+
+        # Boost for larger, more complex components
+        lines_of_code = chunk.end_line - chunk.start_line + 1
+        if lines_of_code > 50:
+            score += 0.2
+        elif lines_of_code > 20:
+            score += 0.1
+
+        return score
+
+    def _get_component_display_name(self, chunk: CodeChunk) -> str:
+        """Get a meaningful display name for the component."""
+        if chunk.name:
+            return chunk.name
+
+        # Extract meaningful name from file path
+        file_name = chunk.file_path.split('/')[-1].split('\\')[-1]
+        if file_name.endswith('.py'):
+            file_name = file_name[:-3]
+        elif file_name.endswith('.js') or file_name.endswith('.ts'):
+            file_name = file_name[:-3]
+
+        # If it's a class or function, try to extract from content
+        content_lines = chunk.content.split('\n')
+        for line in content_lines[:5]:  # Check first 5 lines
+            line = line.strip()
+            if line.startswith('class '):
+                class_name = line.split('class ')[1].split('(')[0].split(':')[0].strip()
+                return class_name
+            elif line.startswith('def '):
+                func_name = line.split('def ')[1].split('(')[0].strip()
+                return func_name
+            elif line.startswith('function '):
+                func_name = line.split('function ')[1].split('(')[0].strip()
+                return func_name
+
+        return f"{file_name} (line {chunk.start_line})"
+
+    def _discover_component_purpose(self, chunk: CodeChunk, system_components: Dict[str, List[CodeChunk]]) -> str:
+        """Dynamically discover the purpose of a component."""
+        # Find which category this component belongs to
+        component_category = None
+        for category, category_chunks in system_components.items():
+            if chunk in category_chunks:
+                component_category = category
+                break
+
+        # Analyze the component's content and context
+        name = (chunk.name or "").lower()
+        content = chunk.content.lower()
+        file_path = chunk.file_path.lower()
+
+        # Generate purpose based on analysis
+        if component_category:
+            purpose = self._generate_category_based_purpose(component_category, name, content, file_path)
+        else:
+            purpose = self._generate_content_based_purpose(name, content, file_path)
+
+        return purpose
+
+    def _generate_category_based_purpose(self, category: str, name: str, content: str, file_path: str) -> str:
+        """Generate purpose based on discovered category."""
+        category_purposes = {
+            "data_access": "Manages data storage and retrieval operations",
+            "api_layer": "Handles API requests and responses",
+            "business_logic": "Implements core business rules and logic",
+            "ui_layer": "Manages user interface and interactions",
+            "data_processing": "Processes and transforms data",
+            "communication": "Handles inter-service communication",
+            "security": "Manages authentication and authorization",
+            "infrastructure": "Provides system infrastructure and utilities",
+            "monitoring": "Handles logging, monitoring, and diagnostics"
+        }
+
+        base_purpose = category_purposes.get(category, f"Handles {category.replace('_', ' ')} functionality")
+
+        # Add specific details based on name and content
+        if "manager" in name:
+            return f"{base_purpose} through management operations"
+        elif "processor" in name:
+            return f"{base_purpose} through data processing"
+        elif "client" in name:
+            return f"{base_purpose} through client-side operations"
+        elif "server" in name:
+            return f"{base_purpose} through server-side operations"
+
+        return base_purpose
+
+    def _generate_content_based_purpose(self, name: str, content: str, file_path: str) -> str:
+        """Generate purpose based on content analysis when category is unknown."""
+        # Analyze content patterns
+        if any(pattern in content for pattern in ["def __init__", "class ", "constructor"]):
+            return "Defines core data structures and initialization logic"
+        elif any(pattern in content for pattern in ["async def", "await ", "asyncio"]):
+            return "Handles asynchronous operations and concurrent processing"
+        elif any(pattern in content for pattern in ["request", "response", "endpoint"]):
+            return "Manages HTTP requests and API interactions"
+        elif any(pattern in content for pattern in ["database", "query", "select", "insert"]):
+            return "Handles database operations and data persistence"
+        elif any(pattern in content for pattern in ["parse", "extract", "transform"]):
+            return "Processes and transforms data structures"
+        elif any(pattern in content for pattern in ["validate", "check", "verify"]):
+            return "Performs data validation and verification"
+        elif any(pattern in content for pattern in ["log", "error", "exception"]):
+            return "Handles error management and logging"
+        else:
+            # Fallback based on file location
+            if "test" in file_path:
+                return "Provides testing and validation functionality"
+            elif "config" in file_path:
+                return "Manages system configuration and settings"
+            elif "util" in file_path or "helper" in file_path:
+                return "Provides utility functions and helper methods"
+            else:
+                return f"Implements {name or 'core'} functionality"
 
     def _determine_component_purpose(self, chunk: CodeChunk, system_components: Dict[str, List[CodeChunk]]) -> str:
         """Determine the purpose of a component in the indexing system."""
