@@ -10,7 +10,8 @@ from loguru import logger
 from ..models import (
     QueryRequest, QueryResponse, QueryResult, GraphData, SystemStatus,
     IndexingRequest, EmbeddingModel, CodeAnalysis, Project, ProjectCreate,
-    ProjectUpdate, ProjectIndexRequest, ProjectStatus, CodeChunk
+    ProjectUpdate, ProjectIndexRequest, ProjectStatus, CodeChunk,
+    FlowAnalysis, AgentPerspectiveModel
 )
 from ..database.qdrant_client import QdrantVectorStore
 from ..database.neo4j_client import Neo4jGraphStore
@@ -19,6 +20,7 @@ from ..embeddings.embedding_generator import EmbeddingGenerator
 from ..chunking.chunk_processor import ChunkProcessor
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..query.query_processor import QueryProcessor, QueryIntent
+from ..agents.agent_orchestrator import AgentOrchestrator
 from ..config import config
 
 
@@ -41,11 +43,26 @@ class MCPServer:
         self.chunk_processor = ChunkProcessor()
         self.code_analyzer = CodeAnalyzer()
         self.query_processor = QueryProcessor()
+
+        # Initialize agent orchestrator with LLM client if available
+        llm_client = None
+        try:
+            if config.ai_models.openai_api_key:
+                from openai import OpenAI
+                llm_client = OpenAI(api_key=config.ai_models.openai_api_key)
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM client for agents: {e}")
+
+        self.agent_orchestrator = AgentOrchestrator(llm_client)
         
         # Setup CORS
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # Configure appropriately for production
+            allow_origins=[
+                "http://localhost:3001",  # Frontend development server
+                "http://127.0.0.1:3001",  # Alternative localhost
+                "*"  # Allow all for development - configure appropriately for production
+            ],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -155,30 +172,33 @@ class MCPServer:
                 # Gather project context for analysis
                 project_context = await self._gather_project_context(request.project_ids)
 
-                # Generate intelligent analysis with comprehensive context
+                # Generate multi-agent analysis for comprehensive insights
                 analysis = None
-                if similar_chunks:
-                    analysis_data = await self.code_analyzer.analyze_query_results(
+                if similar_chunks or is_abstract:
+                    # Prepare context for agents
+                    agent_context = {
+                        "project_context": project_context,
+                        "graph_context": all_graph_context,
+                        "comprehensive_context": comprehensive_context,
+                        "intent": intent,
+                        "confidence": confidence,
+                        "is_abstract": is_abstract
+                    }
+
+                    # Get chunks for analysis (use found chunks or empty list for abstract queries)
+                    chunks_for_analysis = [chunk for chunk, _ in similar_chunks] if similar_chunks else []
+
+                    # Run multi-agent analysis
+                    logger.info("Running multi-agent analysis for comprehensive insights")
+                    flow_response = await self.agent_orchestrator.analyze_with_agents(
                         query=request.query,
-                        vector_results=similar_chunks,
-                        graph_context=all_graph_context,
-                        project_context=project_context,
-                        comprehensive_context=comprehensive_context
+                        chunks=chunks_for_analysis,
+                        context=agent_context
                     )
 
-                    analysis = CodeAnalysis(
-                        summary=analysis_data.get("summary", ""),
-                        detailed_explanation=analysis_data.get("detailed_explanation", ""),
-                        code_flow=analysis_data.get("code_flow", []),
-                        key_components=analysis_data.get("key_components", []),
-                        relationships=analysis_data.get("relationships", []),
-                        recommendations=analysis_data.get("recommendations", [])
-                    )
-                elif is_abstract:
-                    # For abstract queries with no results, provide intelligent fallback analysis
-                    analysis = await self._generate_abstract_fallback_analysis(
-                        request.query, project_context, intent
-                    )
+                    # Convert FlowResponse to CodeAnalysis for compatibility
+                    analysis = self._convert_flow_response_to_analysis(flow_response)
+                    logger.info(f"Multi-agent analysis completed with {len(flow_response.agent_perspectives)} perspectives")
 
                 # Build results with context
                 results = []
@@ -216,6 +236,151 @@ class MCPServer:
                 
             except Exception as e:
                 logger.error(f"Error processing query: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/mcp/query/flow", response_model=FlowAnalysis)
+        async def query_codebase_flow(request: QueryRequest):
+            """Query the codebase with enhanced multi-agent flow analysis."""
+            start_time = time.time()
+
+            try:
+                logger.info(f"Processing flow query: {request.query}")
+
+                # Gather project context for enhanced processing
+                project_context = await self._gather_project_context(request.project_ids)
+
+                # Classify query intent and enhance for better embedding
+                intent, confidence = self.query_processor.classify_query_intent(request.query)
+                logger.info(f"Query intent: {intent.value} (confidence: {confidence:.2f})")
+
+                # Extract code entities from query
+                entities = self.query_processor.extract_code_entities(request.query)
+
+                # Check if query is abstract and needs intelligent expansion
+                is_abstract = self.query_processor.is_abstract_query(request.query)
+                logger.info(f"Query is abstract: {is_abstract}")
+
+                # Handle abstract queries with intelligent expansion
+                search_queries = [request.query]
+                if is_abstract:
+                    logger.info("Expanding abstract query for better search results")
+                    expanded_terms = await self.query_processor.expand_abstract_query(
+                        request.query, project_context
+                    )
+                    search_queries.extend(expanded_terms[:6])  # Use top 6 expanded terms
+                    logger.info(f"Expanded query into {len(search_queries)} search terms")
+
+                # Perform multi-query search for comprehensive coverage
+                all_similar_chunks = []
+                for i, search_query in enumerate(search_queries):
+                    # Enhance each search query for better embedding generation
+                    enhanced_query = self.query_processor.enhance_query_for_embedding(
+                        search_query, intent, project_context
+                    )
+
+                    # Generate search filters (use original query for consistency)
+                    search_filters = self.query_processor.generate_search_filters(
+                        request.query, intent, entities
+                    )
+
+                    # Generate query embedding
+                    query_embedding = await self._generate_query_embedding(enhanced_query, request.model)
+
+                    # Convert search filters to Qdrant format
+                    qdrant_filters = self._convert_search_filters_to_qdrant(search_filters)
+
+                    # Adjust limit per query to get comprehensive results
+                    query_limit = request.limit if i == 0 else max(5, request.limit // len(search_queries))
+
+                    # Search similar chunks
+                    chunks = await self.vector_store.search_similar(
+                        query_embedding=query_embedding,
+                        limit=query_limit,
+                        project_ids=request.project_ids,
+                        filters=qdrant_filters
+                    )
+
+                    # Add query source info for scoring
+                    chunks_with_source = [(chunk, score, i) for chunk, score in chunks]
+                    all_similar_chunks.extend(chunks_with_source)
+
+                # Deduplicate and re-rank results with intelligent scoring
+                similar_chunks = self._deduplicate_and_rerank_chunks(all_similar_chunks, request.limit, is_abstract)
+
+                # Apply post-processing based on intent and entities
+                similar_chunks = self._post_process_search_results(
+                    similar_chunks, intent, entities, confidence
+                )
+
+                # Get comprehensive graph context for enhanced understanding
+                all_graph_context = {}
+                comprehensive_context = {}
+
+                if request.include_context and similar_chunks:
+                    # Get enhanced context for top chunks
+                    top_chunk_ids = [chunk.id for chunk, _ in similar_chunks[:5]]
+
+                    # Get individual chunk contexts
+                    for chunk, _ in similar_chunks[:5]:
+                        context = await self.graph_store.get_chunk_context(chunk.id)
+                        for context_type, chunks in context.items():
+                            if context_type not in all_graph_context:
+                                all_graph_context[context_type] = []
+                            all_graph_context[context_type].extend(chunks)
+
+                    # Get comprehensive architectural context
+                    comprehensive_context = await self.graph_store.get_comprehensive_context(
+                        top_chunk_ids, request.query
+                    )
+
+                # Prepare context for agents
+                agent_context = {
+                    "project_context": project_context,
+                    "graph_context": all_graph_context,
+                    "comprehensive_context": comprehensive_context,
+                    "intent": intent,
+                    "confidence": confidence,
+                    "is_abstract": is_abstract,
+                    "processing_time": time.time() - start_time
+                }
+
+                # Get chunks for analysis (use found chunks or empty list for abstract queries)
+                chunks_for_analysis = [chunk for chunk, _ in similar_chunks] if similar_chunks else []
+
+                # Run multi-agent analysis
+                logger.info("Running multi-agent flow analysis for comprehensive insights")
+                flow_response = await self.agent_orchestrator.analyze_with_agents(
+                    query=request.query,
+                    chunks=chunks_for_analysis,
+                    context=agent_context
+                )
+
+                # Convert to response model
+                flow_analysis = FlowAnalysis(
+                    executive_summary=flow_response.executive_summary,
+                    detailed_analysis=flow_response.detailed_analysis,
+                    agent_perspectives=[
+                        AgentPerspectiveModel(
+                            role=p.role.value,
+                            analysis=p.analysis,
+                            key_insights=p.key_insights,
+                            recommendations=p.recommendations,
+                            confidence=p.confidence,
+                            focus_areas=p.focus_areas
+                        ) for p in flow_response.agent_perspectives
+                    ],
+                    synthesis=flow_response.synthesis,
+                    action_items=flow_response.action_items,
+                    follow_up_questions=flow_response.follow_up_questions
+                )
+
+                processing_time = time.time() - start_time
+                logger.info(f"Flow query processed in {processing_time:.2f}s with {len(flow_response.agent_perspectives)} agent perspectives")
+
+                return flow_analysis
+
+            except Exception as e:
+                logger.error(f"Error processing flow query: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.get("/mcp/graph", response_model=GraphData)
@@ -884,6 +1049,50 @@ Be specific and technical, as if you're a senior architect explaining the system
             ]
 
         return recommendations[:3]  # Limit to top 3
+
+    def _convert_flow_response_to_analysis(self, flow_response) -> CodeAnalysis:
+        """Convert FlowResponse from agent orchestrator to CodeAnalysis for compatibility."""
+
+        # Extract key components from agent perspectives
+        key_components = []
+        for perspective in flow_response.agent_perspectives:
+            for insight in perspective.key_insights[:2]:  # Top 2 insights per agent
+                key_components.append({
+                    "name": f"{perspective.role.value.title()} Insight",
+                    "purpose": insight,
+                    "location": f"{perspective.role.value} analysis"
+                })
+
+        # Extract relationships from agent perspectives
+        relationships = []
+        for i, perspective in enumerate(flow_response.agent_perspectives):
+            if i < len(flow_response.agent_perspectives) - 1:
+                next_perspective = flow_response.agent_perspectives[i + 1]
+                relationships.append({
+                    "from": perspective.role.value.title(),
+                    "to": next_perspective.role.value.title(),
+                    "relationship": "complements",
+                    "context": f"{perspective.role.value} analysis informs {next_perspective.role.value} perspective"
+                })
+
+        # Create code flow from agent focus areas
+        code_flow = []
+        for perspective in flow_response.agent_perspectives:
+            if perspective.focus_areas:
+                code_flow.append(f"Analyze {perspective.focus_areas[0]} from {perspective.role.value} perspective")
+
+        # Add synthesis as final flow step
+        if flow_response.synthesis:
+            code_flow.append("Synthesize multi-perspective insights for comprehensive understanding")
+
+        return CodeAnalysis(
+            summary=flow_response.executive_summary,
+            detailed_explanation=flow_response.detailed_analysis,
+            code_flow=code_flow[:5],  # Limit to 5 steps
+            key_components=key_components[:6],  # Limit to 6 components
+            relationships=relationships[:4],  # Limit to 4 relationships
+            recommendations=flow_response.action_items[:5]  # Limit to 5 recommendations
+        )
 
     async def _gather_project_context(self, project_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Gather project context for analysis."""

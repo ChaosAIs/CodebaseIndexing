@@ -6,7 +6,7 @@ class ApiService {
   constructor() {
     this.client = axios.create({
       baseURL: API_BASE_URL,
-      timeout: 30000,
+      timeout: 120000, // Increased to 2 minutes for multi-agent analysis
       headers: {
         'Content-Type': 'application/json',
       },
@@ -46,10 +46,30 @@ class ApiService {
         limit: options.limit || 10,
         include_context: options.includeContext !== false,
         project_ids: options.projectIds || null,
+      }, {
+        timeout: 120000  // 2 minutes for multi-agent analysis
       });
       return response.data;
     } catch (error) {
       throw this.handleError(error, 'Failed to query codebase');
+    }
+  }
+
+  // Query the codebase with enhanced flow analysis
+  async queryCodebaseFlow(query, options = {}) {
+    try {
+      const response = await this.client.post('/mcp/query/flow', {
+        query,
+        model: options.model || null,
+        limit: options.limit || 10,
+        include_context: options.includeContext !== false,
+        project_ids: options.projectIds || null,
+      }, {
+        timeout: 120000  // 2 minutes for multi-agent flow analysis
+      });
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error, 'Failed to query codebase with flow analysis');
     }
   }
 
@@ -89,6 +109,8 @@ class ApiService {
         languages: options.languages || ['python'],
         embedding_model: options.embeddingModel || null,
         force_reindex: options.forceReindex || false,
+      }, {
+        timeout: 300000  // 5 minutes for indexing operations
       });
       return response.data;
     } catch (error) {
@@ -157,6 +179,8 @@ class ApiService {
         languages: options.languages || ['python', 'javascript', 'typescript'],
         embedding_model: options.embeddingModel || null,
         force_reindex: options.forceReindex || false,
+      }, {
+        timeout: 300000  // 5 minutes for project indexing operations
       });
       return response.data;
     } catch (error) {

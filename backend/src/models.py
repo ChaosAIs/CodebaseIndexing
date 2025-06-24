@@ -80,6 +80,28 @@ class CodeAnalysis(BaseModel):
     recommendations: List[str] = Field(default_factory=list, description="Recommendations and insights")
 
 
+class AgentPerspectiveModel(BaseModel):
+    """Agent perspective for multi-agent analysis."""
+
+    role: str = Field(..., description="Agent role (architect, developer, security, etc.)")
+    analysis: str = Field(..., description="Agent's detailed analysis")
+    key_insights: List[str] = Field(default_factory=list, description="Key insights from this perspective")
+    recommendations: List[str] = Field(default_factory=list, description="Recommendations from this agent")
+    confidence: float = Field(..., description="Confidence level of the analysis (0.0-1.0)")
+    focus_areas: List[str] = Field(default_factory=list, description="Primary focus areas of this agent")
+
+
+class FlowAnalysis(BaseModel):
+    """Enhanced flow-based analysis with multi-agent perspectives."""
+
+    executive_summary: str = Field(..., description="High-level executive summary")
+    detailed_analysis: str = Field(..., description="Comprehensive flowing analysis")
+    agent_perspectives: List[AgentPerspectiveModel] = Field(default_factory=list, description="Individual agent perspectives")
+    synthesis: str = Field(..., description="Synthesis connecting all perspectives")
+    action_items: List[str] = Field(default_factory=list, description="Prioritized action items")
+    follow_up_questions: List[str] = Field(default_factory=list, description="Suggested follow-up questions")
+
+
 class QueryResponse(BaseModel):
     """Response model for codebase queries."""
 

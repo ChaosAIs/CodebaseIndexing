@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen, X } from 'lucide-react';
+import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen, X, Users, Brain, Target, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { apiService } from '../services/apiService';
@@ -10,6 +10,7 @@ const ChatInterface = ({ systemStatus }) => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isMultiAgentAnalysis, setIsMultiAgentAnalysis] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [includeContext, setIncludeContext] = useState(true);
@@ -17,6 +18,7 @@ const ChatInterface = ({ systemStatus }) => {
   const [selectedProjectIds, setSelectedProjectIds] = usePersistedProjectSelection();
   const [expandedComponents, setExpandedComponents] = useState({});
   const [expandedResults, setExpandedResults] = useState({});
+  const [expandedAgentPerspectives, setExpandedAgentPerspectives] = useState({});
   const [projects, setProjects] = useState([]);
 
   const messagesEndRef = useRef(null);
@@ -63,7 +65,15 @@ const ChatInterface = ({ systemStatus }) => {
     }));
   };
 
-  const handleSubmit = async (e) => {
+  const handleExpandAgentPerspective = (messageId, agentIndex) => {
+    const key = `${messageId}-${agentIndex}`;
+    setExpandedAgentPerspectives(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const handleSubmit = async (e, useFlowAnalysis = false) => {
     e.preventDefault();
     if (!inputValue.trim() || isLoading) return;
 
@@ -71,24 +81,36 @@ const ChatInterface = ({ systemStatus }) => {
       id: Date.now(),
       type: 'user',
       content: inputValue.trim(),
-      timestamp: new Date()
+      timestamp: new Date(),
+      flowAnalysis: useFlowAnalysis
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
     setIsLoading(true);
+    setIsMultiAgentAnalysis(useFlowAnalysis);
 
     try {
-      const response = await apiService.queryCodebase(userMessage.content, {
-        model: selectedModel || null,
-        limit: resultLimit,
-        includeContext: includeContext,
-        projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
-      });
+      let response;
+      if (useFlowAnalysis) {
+        response = await apiService.queryCodebaseFlow(userMessage.content, {
+          model: selectedModel || null,
+          limit: resultLimit,
+          includeContext: includeContext,
+          projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
+        });
+      } else {
+        response = await apiService.queryCodebase(userMessage.content, {
+          model: selectedModel || null,
+          limit: resultLimit,
+          includeContext: includeContext,
+          projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
+        });
+      }
 
       const assistantMessage = {
         id: Date.now() + 1,
-        type: 'assistant',
+        type: useFlowAnalysis ? 'flow_assistant' : 'assistant',
         content: response,
         timestamp: new Date()
       };
@@ -104,6 +126,7 @@ const ChatInterface = ({ systemStatus }) => {
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+      setIsMultiAgentAnalysis(false);
       inputRef.current?.focus();
     }
   };
@@ -135,6 +158,154 @@ const ChatInterface = ({ systemStatus }) => {
     return languageMap[extension] || 'text';
   };
 
+  const formatAgentRole = (role) => {
+    return role.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const getAgentRoleIcon = (role) => {
+    const iconMap = {
+      'architect': Settings,
+      'developer': Code,
+      'security': AlertTriangle,
+      'performance': Target,
+      'maintainer': CheckCircle,
+      'business': Users,
+      'integration': FileText,
+      'data': FileText,
+      'ui_ux': Settings,
+      'devops': Settings,
+      'testing': CheckCircle,
+      'compliance': AlertTriangle
+    };
+    return iconMap[role] || Brain;
+  };
+
+  const getAgentRoleColorClasses = (role) => {
+    const colorMap = {
+      'architect': {
+        bg: 'bg-blue-50',
+        border: 'border-blue-200',
+        hover: 'hover:bg-blue-100',
+        text: 'text-blue-900',
+        textSecondary: 'text-blue-800',
+        textTertiary: 'text-blue-600',
+        bgSecondary: 'bg-blue-100',
+        dot: 'bg-blue-600'
+      },
+      'developer': {
+        bg: 'bg-green-50',
+        border: 'border-green-200',
+        hover: 'hover:bg-green-100',
+        text: 'text-green-900',
+        textSecondary: 'text-green-800',
+        textTertiary: 'text-green-600',
+        bgSecondary: 'bg-green-100',
+        dot: 'bg-green-600'
+      },
+      'security': {
+        bg: 'bg-red-50',
+        border: 'border-red-200',
+        hover: 'hover:bg-red-100',
+        text: 'text-red-900',
+        textSecondary: 'text-red-800',
+        textTertiary: 'text-red-600',
+        bgSecondary: 'bg-red-100',
+        dot: 'bg-red-600'
+      },
+      'performance': {
+        bg: 'bg-purple-50',
+        border: 'border-purple-200',
+        hover: 'hover:bg-purple-100',
+        text: 'text-purple-900',
+        textSecondary: 'text-purple-800',
+        textTertiary: 'text-purple-600',
+        bgSecondary: 'bg-purple-100',
+        dot: 'bg-purple-600'
+      },
+      'maintainer': {
+        bg: 'bg-yellow-50',
+        border: 'border-yellow-200',
+        hover: 'hover:bg-yellow-100',
+        text: 'text-yellow-900',
+        textSecondary: 'text-yellow-800',
+        textTertiary: 'text-yellow-600',
+        bgSecondary: 'bg-yellow-100',
+        dot: 'bg-yellow-600'
+      },
+      'business': {
+        bg: 'bg-indigo-50',
+        border: 'border-indigo-200',
+        hover: 'hover:bg-indigo-100',
+        text: 'text-indigo-900',
+        textSecondary: 'text-indigo-800',
+        textTertiary: 'text-indigo-600',
+        bgSecondary: 'bg-indigo-100',
+        dot: 'bg-indigo-600'
+      },
+      'integration': {
+        bg: 'bg-pink-50',
+        border: 'border-pink-200',
+        hover: 'hover:bg-pink-100',
+        text: 'text-pink-900',
+        textSecondary: 'text-pink-800',
+        textTertiary: 'text-pink-600',
+        bgSecondary: 'bg-pink-100',
+        dot: 'bg-pink-600'
+      },
+      'data': {
+        bg: 'bg-cyan-50',
+        border: 'border-cyan-200',
+        hover: 'hover:bg-cyan-100',
+        text: 'text-cyan-900',
+        textSecondary: 'text-cyan-800',
+        textTertiary: 'text-cyan-600',
+        bgSecondary: 'bg-cyan-100',
+        dot: 'bg-cyan-600'
+      },
+      'ui_ux': {
+        bg: 'bg-orange-50',
+        border: 'border-orange-200',
+        hover: 'hover:bg-orange-100',
+        text: 'text-orange-900',
+        textSecondary: 'text-orange-800',
+        textTertiary: 'text-orange-600',
+        bgSecondary: 'bg-orange-100',
+        dot: 'bg-orange-600'
+      },
+      'devops': {
+        bg: 'bg-gray-50',
+        border: 'border-gray-200',
+        hover: 'hover:bg-gray-100',
+        text: 'text-gray-900',
+        textSecondary: 'text-gray-800',
+        textTertiary: 'text-gray-600',
+        bgSecondary: 'bg-gray-100',
+        dot: 'bg-gray-600'
+      },
+      'testing': {
+        bg: 'bg-emerald-50',
+        border: 'border-emerald-200',
+        hover: 'hover:bg-emerald-100',
+        text: 'text-emerald-900',
+        textSecondary: 'text-emerald-800',
+        textTertiary: 'text-emerald-600',
+        bgSecondary: 'bg-emerald-100',
+        dot: 'bg-emerald-600'
+      },
+      'compliance': {
+        bg: 'bg-rose-50',
+        border: 'border-rose-200',
+        hover: 'hover:bg-rose-100',
+        text: 'text-rose-900',
+        textSecondary: 'text-rose-800',
+        textTertiary: 'text-rose-600',
+        bgSecondary: 'bg-rose-100',
+        dot: 'bg-rose-600'
+      }
+    };
+    return colorMap[role] || colorMap['devops']; // Default to gray
+  };
+
   const toggleComponentExpansion = (messageId, componentIndex) => {
     const key = `${messageId}-${componentIndex}`;
     setExpandedComponents(prev => ({
@@ -144,21 +315,39 @@ const ChatInterface = ({ systemStatus }) => {
   };
 
   const findComponentCode = (component, results) => {
-    // Find the code chunk that matches this component
-    const locationParts = component.location.split(':');
-    const filePath = locationParts[0];
-    const lineNumber = parseInt(locationParts[1]);
+    // For multi-agent analysis, try to find relevant code chunks based on component content
+    if (!results || results.length === 0) return null;
 
-    // Look for matching chunks in results
+    // Try to find chunks that match the component's purpose or name
     const matchingChunks = results.filter(result => {
       const chunk = result.chunk;
-      return chunk.file_path.includes(filePath) &&
-             chunk.start_line <= lineNumber &&
-             chunk.end_line >= lineNumber &&
-             (chunk.name === component.name || chunk.content.includes(component.name));
+      const componentName = component.name.toLowerCase();
+      const componentPurpose = component.purpose.toLowerCase();
+      const chunkContent = chunk.content.toLowerCase();
+      const chunkName = (chunk.name || '').toLowerCase();
+
+      // Check if the chunk is relevant to this component
+      return (
+        // Direct name match
+        chunkName.includes(componentName.replace(/\s+/g, '')) ||
+        // Content relevance
+        chunkContent.includes(componentName.replace(/\s+/g, '')) ||
+        // Purpose-based matching for common patterns
+        (componentPurpose.includes('dto') && (chunkName.includes('dto') || chunkContent.includes('dto'))) ||
+        (componentPurpose.includes('model') && (chunkName.includes('model') || chunkContent.includes('class'))) ||
+        (componentPurpose.includes('request') && (chunkName.includes('request') || chunkContent.includes('request'))) ||
+        (componentPurpose.includes('response') && (chunkName.includes('response') || chunkContent.includes('response'))) ||
+        (componentPurpose.includes('validation') && (chunkName.includes('valid') || chunkContent.includes('valid'))) ||
+        (componentPurpose.includes('pydantic') && chunkContent.includes('pydantic')) ||
+        (componentPurpose.includes('architecture') && (chunkName.includes('server') || chunkName.includes('main'))) ||
+        (componentPurpose.includes('separation of concerns') && (chunkName.includes('server') || chunkName.includes('client')))
+      );
     });
 
-    return matchingChunks.length > 0 ? matchingChunks[0] : null;
+    // Return the highest scoring match
+    return matchingChunks.length > 0 ?
+      matchingChunks.sort((a, b) => b.score - a.score)[0] :
+      null;
   };
 
   const renderMessage = (message) => {
@@ -168,8 +357,16 @@ const ChatInterface = ({ systemStatus }) => {
           <div key={message.id} className="flex justify-end mb-4">
             <div className="max-w-3xl bg-primary-600 text-white rounded-lg px-4 py-2">
               <p className="whitespace-pre-wrap">{message.content}</p>
-              <div className="text-xs text-primary-200 mt-1">
-                {message.timestamp.toLocaleTimeString()}
+              <div className="flex items-center justify-between mt-2">
+                <div className="text-xs text-primary-200">
+                  {message.timestamp.toLocaleTimeString()}
+                </div>
+                {message.flowAnalysis && (
+                  <div className="flex items-center space-x-1 text-xs text-primary-200">
+                    <Brain className="w-3 h-3" />
+                    <span>Multi-Agent Analysis</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -467,6 +664,212 @@ const ChatInterface = ({ systemStatus }) => {
           </div>
         );
 
+      case 'flow_assistant':
+        return (
+          <div key={message.id} className="flex justify-start mb-6">
+            <div className="max-w-6xl bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-blue-50 to-purple-50 px-4 py-3 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Brain className="w-5 h-5 text-blue-600" />
+                    <span className="text-lg font-semibold text-gray-800">
+                      Multi-Agent Analysis
+                    </span>
+                    <span className="text-sm text-gray-600">
+                      ({message.content.agent_perspectives?.length || 0} expert perspectives)
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {(message.content.processing_time * 1000).toFixed(0)}ms
+                  </div>
+                </div>
+              </div>
+
+              {/* Executive Summary */}
+              {message.content.executive_summary && (
+                <div className="p-4 bg-blue-50 border-b border-blue-200">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <Target className="w-5 h-5 text-blue-600" />
+                    <h3 className="text-lg font-medium text-blue-900">Executive Summary</h3>
+                  </div>
+                  <p className="text-blue-800 leading-relaxed">{message.content.executive_summary}</p>
+                </div>
+              )}
+
+              {/* Agent Perspectives */}
+              {message.content.agent_perspectives && message.content.agent_perspectives.length > 0 && (
+                <div className="p-4 space-y-4">
+                  <div className="flex items-center space-x-2 mb-4">
+                    <Users className="w-5 h-5 text-gray-600" />
+                    <h3 className="text-lg font-medium text-gray-900">Expert Perspectives</h3>
+                  </div>
+
+                  <div className="grid gap-4">
+                    {message.content.agent_perspectives.map((perspective, index) => {
+                      const perspectiveKey = `${message.id}-${index}`;
+                      const isExpanded = expandedAgentPerspectives[perspectiveKey];
+                      const IconComponent = getAgentRoleIcon(perspective.role);
+                      const colors = getAgentRoleColorClasses(perspective.role);
+
+                      return (
+                        <div key={index} className={`${colors.bg} ${colors.border} rounded-lg overflow-hidden`}>
+                          {/* Agent Header - Clickable */}
+                          <div
+                            className={`p-4 cursor-pointer ${colors.hover} transition-colors`}
+                            onClick={() => handleExpandAgentPerspective(message.id, index)}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-3">
+                                <div className={`p-2 ${colors.bgSecondary} rounded-lg`}>
+                                  <IconComponent className={`w-5 h-5 ${colors.textTertiary}`} />
+                                </div>
+                                <div>
+                                  <h4 className={`font-semibold ${colors.text}`}>
+                                    {formatAgentRole(perspective.role)}
+                                  </h4>
+                                  <div className="flex items-center space-x-2 mt-1">
+                                    <span className={`text-xs ${colors.textTertiary} ${colors.bgSecondary} px-2 py-1 rounded`}>
+                                      Confidence: {(perspective.confidence * 100).toFixed(0)}%
+                                    </span>
+                                    {perspective.focus_areas && perspective.focus_areas.length > 0 && (
+                                      <span className={`text-xs ${colors.textTertiary}`}>
+                                        Focus: {perspective.focus_areas.join(', ')}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className={`text-xs ${colors.textTertiary}`}>
+                                  {isExpanded ? 'Click to collapse' : 'Click to expand'}
+                                </span>
+                                {isExpanded ? (
+                                  <ChevronUp className={`w-4 h-4 ${colors.textTertiary}`} />
+                                ) : (
+                                  <ChevronDown className={`w-4 h-4 ${colors.textTertiary}`} />
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Brief Analysis Preview */}
+                            <p className={`${colors.textSecondary} text-sm mt-2 line-clamp-2`}>
+                              {perspective.analysis}
+                            </p>
+                          </div>
+
+                          {/* Expanded Content */}
+                          {isExpanded && (
+                            <div className={`${colors.border} border-t p-4 space-y-4`}>
+                              {/* Full Analysis */}
+                              <div>
+                                <h5 className={`font-medium ${colors.text} mb-2`}>Detailed Analysis</h5>
+                                <p className={`${colors.textSecondary} leading-relaxed`}>{perspective.analysis}</p>
+                              </div>
+
+                              {/* Key Insights */}
+                              {perspective.key_insights && perspective.key_insights.length > 0 && (
+                                <div>
+                                  <h5 className={`font-medium ${colors.text} mb-2`}>Key Insights</h5>
+                                  <ul className="space-y-1">
+                                    {perspective.key_insights.map((insight, insightIndex) => (
+                                      <li key={insightIndex} className="flex items-start space-x-2">
+                                        <span className={`flex-shrink-0 w-2 h-2 ${colors.dot} rounded-full mt-2`}></span>
+                                        <span className={`${colors.textSecondary} text-sm`}>{insight}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {/* Recommendations */}
+                              {perspective.recommendations && perspective.recommendations.length > 0 && (
+                                <div>
+                                  <h5 className={`font-medium ${colors.text} mb-2`}>Recommendations</h5>
+                                  <ul className="space-y-1">
+                                    {perspective.recommendations.map((recommendation, recIndex) => (
+                                      <li key={recIndex} className="flex items-start space-x-2">
+                                        <CheckCircle className={`flex-shrink-0 w-4 h-4 ${colors.textTertiary} mt-0.5`} />
+                                        <span className={`${colors.textSecondary} text-sm`}>{recommendation}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Detailed Analysis */}
+              {message.content.detailed_analysis && (
+                <div className="p-4 bg-green-50 border-t border-green-200">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <FileText className="w-5 h-5 text-green-600" />
+                    <h3 className="text-lg font-medium text-green-900">Comprehensive Analysis</h3>
+                  </div>
+                  <div className="text-green-800 leading-relaxed whitespace-pre-wrap">
+                    {message.content.detailed_analysis}
+                  </div>
+                </div>
+              )}
+
+              {/* Synthesis */}
+              {message.content.synthesis && (
+                <div className="p-4 bg-purple-50 border-t border-purple-200">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <Brain className="w-5 h-5 text-purple-600" />
+                    <h3 className="text-lg font-medium text-purple-900">Synthesis</h3>
+                  </div>
+                  <p className="text-purple-800 leading-relaxed">{message.content.synthesis}</p>
+                </div>
+              )}
+
+              {/* Action Items */}
+              {message.content.action_items && message.content.action_items.length > 0 && (
+                <div className="p-4 bg-yellow-50 border-t border-yellow-200">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <Target className="w-5 h-5 text-yellow-600" />
+                    <h3 className="text-lg font-medium text-yellow-900">Action Items</h3>
+                  </div>
+                  <ol className="space-y-2">
+                    {message.content.action_items.map((item, index) => (
+                      <li key={index} className="flex items-start space-x-2">
+                        <span className="flex-shrink-0 w-6 h-6 bg-yellow-600 text-white text-xs rounded-full flex items-center justify-center font-medium">
+                          {index + 1}
+                        </span>
+                        <span className="text-yellow-800">{item}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {/* Follow-up Questions */}
+              {message.content.follow_up_questions && message.content.follow_up_questions.length > 0 && (
+                <div className="p-4 bg-indigo-50 border-t border-indigo-200">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <Search className="w-5 h-5 text-indigo-600" />
+                    <h3 className="text-lg font-medium text-indigo-900">Follow-up Questions</h3>
+                  </div>
+                  <ul className="space-y-2">
+                    {message.content.follow_up_questions.map((question, index) => (
+                      <li key={index} className="flex items-start space-x-2">
+                        <span className="flex-shrink-0 w-2 h-2 bg-indigo-600 rounded-full mt-2"></span>
+                        <span className="text-indigo-800">{question}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
       case 'error':
         return (
           <div key={message.id} className="flex justify-start mb-4">
@@ -638,7 +1041,7 @@ const ChatInterface = ({ systemStatus }) => {
             </h3>
             <p className="text-gray-600 max-w-md mx-auto mb-4">
               Ask questions about your code using natural language.
-              Try queries like "find authentication functions" or "show me error handling code".
+              Use quick search for fast results, or comprehensive analysis for multi-expert perspectives.
             </p>
 
             {/* Project Selection Status */}
@@ -676,9 +1079,30 @@ const ChatInterface = ({ systemStatus }) => {
           <div className="flex justify-start mb-4">
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3">
               <div className="flex items-center space-x-2">
-                <Loader2 className="w-4 h-4 animate-spin text-primary-600" />
-                <span className="text-gray-600">Searching codebase...</span>
+                {isMultiAgentAnalysis ? (
+                  <>
+                    <Brain className="w-4 h-4 animate-pulse text-purple-600" />
+                    <span className="text-gray-600">
+                      Running multi-agent analysis... This may take up to 2 minutes.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-primary-600" />
+                    <span className="text-gray-600">Searching codebase...</span>
+                  </>
+                )}
               </div>
+              {isMultiAgentAnalysis && (
+                <div className="mt-2 text-xs text-gray-500">
+                  <div className="flex items-center space-x-1">
+                    <div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                    <div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                    <span className="ml-2">Consulting 6-10 expert agents for comprehensive insights</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -711,14 +1135,27 @@ const ChatInterface = ({ systemStatus }) => {
             type="button"
             onClick={() => setShowSettings(!showSettings)}
             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Query Settings"
           >
             <Settings className="w-5 h-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => handleSubmit(e, true)}
+            disabled={!inputValue.trim() || isLoading}
+            className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-1"
+            title="Multi-Agent Analysis - Comprehensive analysis from multiple expert perspectives"
+          >
+            <Brain className="w-4 h-4" />
+            <span className="text-sm font-medium">Analyze</span>
           </button>
 
           <button
             type="submit"
             disabled={!inputValue.trim() || isLoading}
             className="p-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Quick Search"
           >
             <Send className="w-5 h-5" />
           </button>
@@ -726,7 +1163,7 @@ const ChatInterface = ({ systemStatus }) => {
 
         <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
           <div className="flex items-center space-x-4">
-            <span>Press Enter to send, Shift+Enter for new line</span>
+            <span>Press Enter for quick search • Use "Analyze" for comprehensive multi-agent analysis</span>
             {selectedProjectIds.length > 0 && (
               <div className="flex items-center space-x-1 text-blue-600">
                 <FolderOpen className="w-3 h-3" />
