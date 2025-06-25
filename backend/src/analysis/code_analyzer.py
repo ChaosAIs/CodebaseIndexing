@@ -733,35 +733,60 @@ Respond naturally and conversationally. Do not use rigid sections like "Analysis
         return flow_steps[:5]  # Limit to 5 steps
 
     def _generate_chunk_based_flow(self, chunks: List[CodeChunk]) -> List[str]:
-        """Generate flow based on individual chunk analysis."""
+        """Generate detailed flow based on individual chunk analysis."""
         flow_steps = []
 
-        for chunk in chunks[:3]:
+        for i, chunk in enumerate(chunks[:5], 1):  # Analyze top 5 chunks
+            file_name = chunk.file_path.split('/')[-1] if '/' in chunk.file_path else chunk.file_path.split('\\')[-1]
+            content_lower = chunk.content.lower()
+
             if chunk.name:
                 # Analyze function/class name to understand its role
                 name_lower = chunk.name.lower()
 
+                # Generate detailed flow step with emojis and context
                 if any(word in name_lower for word in ["parse", "extract", "read"]):
-                    flow_steps.append(f"Parse/Extract data using {chunk.name}")
+                    flow_steps.append(f"{i}. 📥 Parse/Extract data using {chunk.name}() in {file_name}")
                 elif any(word in name_lower for word in ["process", "transform", "convert"]):
-                    flow_steps.append(f"Process/Transform data with {chunk.name}")
+                    flow_steps.append(f"{i}. ⚙️ Process/Transform data with {chunk.name}() in {file_name}")
                 elif any(word in name_lower for word in ["store", "save", "persist"]):
-                    flow_steps.append(f"Store/Persist data via {chunk.name}")
+                    flow_steps.append(f"{i}. 💾 Store/Persist data via {chunk.name}() in {file_name}")
                 elif any(word in name_lower for word in ["search", "find", "query"]):
-                    flow_steps.append(f"Search/Query data using {chunk.name}")
+                    flow_steps.append(f"{i}. 🔍 Search/Query data using {chunk.name}() in {file_name}")
                 elif any(word in name_lower for word in ["handle", "manage", "control"]):
-                    flow_steps.append(f"Handle/Manage operations with {chunk.name}")
+                    flow_steps.append(f"{i}. 🎛️ Handle/Manage operations with {chunk.name}() in {file_name}")
+                elif any(word in name_lower for word in ["init", "setup", "configure"]):
+                    flow_steps.append(f"{i}. 🔧 Initialize/Setup {chunk.name}() in {file_name}")
+                elif any(word in name_lower for word in ["validate", "check", "verify"]):
+                    flow_steps.append(f"{i}. ✅ Validate/Check data with {chunk.name}() in {file_name}")
+                elif "async" in content_lower and "def " + chunk.name in chunk.content:
+                    flow_steps.append(f"{i}. ⚡ Execute async operation {chunk.name}() in {file_name}")
                 else:
-                    flow_steps.append(f"Execute {chunk.name} functionality")
+                    flow_steps.append(f"{i}. 🔧 Execute {chunk.name}() functionality in {file_name}")
             else:
-                # Analyze content for clues
-                content_lower = chunk.content.lower()
-                if "def " in content_lower or "function" in content_lower:
-                    flow_steps.append(f"Execute function at {chunk.file_path}:{chunk.start_line}")
-                elif "class " in content_lower:
-                    flow_steps.append(f"Instantiate class at {chunk.file_path}:{chunk.start_line}")
+                # Analyze content for clues when no name is available
+                if "class " in content_lower:
+                    # Try to extract class name
+                    class_lines = [line.strip() for line in chunk.content.split('\n') if line.strip().startswith('class ')]
+                    if class_lines:
+                        class_name = class_lines[0].split('class ')[1].split('(')[0].split(':')[0].strip()
+                        flow_steps.append(f"{i}. 📦 Initialize {class_name} class in {file_name}")
+                    else:
+                        flow_steps.append(f"{i}. 📦 Initialize class structure in {file_name}:{chunk.start_line}")
+                elif "def " in content_lower:
+                    # Try to extract function name
+                    func_lines = [line.strip() for line in chunk.content.split('\n') if line.strip().startswith('def ')]
+                    if func_lines:
+                        func_name = func_lines[0].split('def ')[1].split('(')[0].strip()
+                        flow_steps.append(f"{i}. 🔧 Execute {func_name}() function in {file_name}")
+                    else:
+                        flow_steps.append(f"{i}. 🔧 Execute function in {file_name}:{chunk.start_line}")
+                elif any(pattern in content_lower for pattern in ["import", "from"]):
+                    flow_steps.append(f"{i}. 📥 Load dependencies and modules in {file_name}")
+                elif any(pattern in content_lower for pattern in ["config", "settings"]):
+                    flow_steps.append(f"{i}. ⚙️ Configure system settings in {file_name}")
                 else:
-                    flow_steps.append(f"Process code block at {chunk.file_path}:{chunk.start_line}")
+                    flow_steps.append(f"{i}. 📄 Process code block in {file_name}:{chunk.start_line}")
 
         return flow_steps
 
@@ -778,13 +803,23 @@ Respond naturally and conversationally. Do not use rigid sections like "Analysis
         # Sort by importance score
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
-        # Build key components list
-        for chunk, score in scored_chunks[:5]:  # Top 5 components
+        # Build key components list with enhanced details
+        for chunk, score in scored_chunks[:6]:  # Top 6 components
+            # Extract additional details from the chunk
+            file_name = chunk.file_path.split('/')[-1] if '/' in chunk.file_path else chunk.file_path.split('\\')[-1]
+            lines_count = chunk.end_line - chunk.start_line + 1
+
+            # Analyze content for specific patterns
+            content_analysis = self._analyze_chunk_content(chunk)
+
             component = {
                 "name": self._get_component_display_name(chunk),
                 "purpose": self._discover_component_purpose(chunk, system_components),
-                "location": f"{chunk.file_path}:{chunk.start_line}",
-                "importance_score": round(score, 2)
+                "location": f"{file_name}:{chunk.start_line}-{chunk.end_line}",
+                "importance_score": round(score, 2),
+                "size": f"{lines_count} lines",
+                "type": chunk.node_type.value if chunk.node_type else "component",
+                "details": content_analysis
             }
             key_components.append(component)
 
@@ -841,6 +876,42 @@ Respond naturally and conversationally. Do not use rigid sections like "Analysis
             score += 0.1
 
         return score
+
+    def _analyze_chunk_content(self, chunk: CodeChunk) -> str:
+        """Analyze chunk content to extract specific implementation details."""
+        details = []
+        content = chunk.content
+        content_lower = content.lower()
+
+        # Count different types of elements
+        class_count = content.count('class ')
+        func_count = content.count('def ')
+        async_count = content.count('async def')
+
+        if class_count > 0:
+            details.append(f"{class_count} class{'es' if class_count > 1 else ''}")
+        if func_count > 0:
+            details.append(f"{func_count} function{'s' if func_count > 1 else ''}")
+        if async_count > 0:
+            details.append(f"{async_count} async operation{'s' if async_count > 1 else ''}")
+
+        # Check for specific patterns
+        patterns = {
+            'database': ['database', 'db', 'query', 'select', 'insert', 'update'],
+            'api': ['api', 'endpoint', 'route', 'fastapi', 'flask', 'request', 'response'],
+            'authentication': ['auth', 'login', 'token', 'jwt', 'password'],
+            'configuration': ['config', 'settings', 'environment', 'env'],
+            'error_handling': ['try:', 'except', 'raise', 'error', 'exception'],
+            'async_operations': ['async', 'await', 'asyncio'],
+            'data_processing': ['process', 'transform', 'parse', 'extract'],
+            'validation': ['validate', 'check', 'verify', 'assert']
+        }
+
+        for pattern_name, keywords in patterns.items():
+            if any(keyword in content_lower for keyword in keywords):
+                details.append(pattern_name.replace('_', ' '))
+
+        return '; '.join(details) if details else 'core functionality'
 
     def _get_component_display_name(self, chunk: CodeChunk) -> str:
         """Get a meaningful display name for the component."""

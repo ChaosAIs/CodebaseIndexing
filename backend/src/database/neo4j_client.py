@@ -37,7 +37,7 @@ class Neo4jGraphStore:
         if self.driver:
             self.driver.close()
     
-    async def initialize_schema(self):
+    def initialize_schema(self):
         """Initialize Neo4j schema with constraints and indexes."""
         try:
             with self.driver.session() as session:
@@ -160,7 +160,20 @@ class Neo4jGraphStore:
                             "caller_id": chunk.id,
                             "callee_id": called_id
                         })
-                
+
+                # Create import relationships
+                for chunk in chunks:
+                    for imported_id in chunk.imports:
+                        session.run("""
+                            MATCH (importer:Chunk {id: $importer_id})
+                            MATCH (imported:Chunk {id: $imported_id})
+                            CREATE (importer)-[:IMPORTS {weight: 0.3}]->(imported)
+                            CREATE (imported)-[:IMPORTED_BY {weight: 0.3}]->(importer)
+                        """, {
+                            "importer_id": chunk.id,
+                            "imported_id": imported_id
+                        })
+
                 logger.info("Created relationships in Neo4j")
                 return True
                 
@@ -185,8 +198,8 @@ class Neo4jGraphStore:
 
                 # Get hierarchical parents (up to root)
                 result = session.run("""
-                    MATCH (c:Chunk {id: $chunk_id})-[:CHILD_OF*1..5]->(parent:Chunk)
-                    RETURN parent, length((c)-[:CHILD_OF*]->(parent)) as depth
+                    MATCH path = (c:Chunk {id: $chunk_id})-[:CHILD_OF*1..5]->(parent:Chunk)
+                    RETURN parent, length(path) as depth
                     ORDER BY depth ASC
                 """, chunk_id=chunk_id)
 
@@ -196,8 +209,8 @@ class Neo4jGraphStore:
 
                 # Get all children (deeper exploration)
                 result = session.run("""
-                    MATCH (c:Chunk {id: $chunk_id})-[:PARENT_OF*1..3]->(child:Chunk)
-                    RETURN child, length((c)-[:PARENT_OF*]->(child)) as depth
+                    MATCH path = (c:Chunk {id: $chunk_id})-[:PARENT_OF*1..3]->(child:Chunk)
+                    RETURN child, length(path) as depth
                     ORDER BY depth ASC
                 """, chunk_id=chunk_id)
 
@@ -437,9 +450,9 @@ class Neo4jGraphStore:
         stats_result = session.run("""
             MATCH (c:Chunk)
             WHERE c.id IN $chunk_ids
-            WITH DISTINCT c.file_path as file_path
+            WITH collect(DISTINCT c.file_path) as file_paths
             MATCH (all_chunks:Chunk)
-            WHERE all_chunks.file_path IN collect(file_path)
+            WHERE all_chunks.file_path IN file_paths
             RETURN count(DISTINCT all_chunks.file_path) as total_files,
                    count(all_chunks) as total_chunks,
                    count(DISTINCT all_chunks.node_type) as node_types,
@@ -452,9 +465,9 @@ class Neo4jGraphStore:
         dist_result = session.run("""
             MATCH (c:Chunk)
             WHERE c.id IN $chunk_ids
-            WITH DISTINCT c.file_path as file_path
+            WITH collect(DISTINCT c.file_path) as file_paths
             MATCH (all_chunks:Chunk)
-            WHERE all_chunks.file_path IN collect(file_path)
+            WHERE all_chunks.file_path IN file_paths
             RETURN all_chunks.node_type as node_type, count(*) as count
             ORDER BY count DESC
         """, chunk_ids=chunk_ids)
@@ -552,6 +565,93 @@ class Neo4jGraphStore:
         except Exception as e:
             logger.error(f"Error getting graph data: {e}")
             return GraphData(nodes=[], edges=[])
+
+    def find_related_entities(self, entity_names: List[str], max_depth: int = 2, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Find entities related to the given entity names through graph relationships.
+
+        Args:
+            entity_names: List of entity names to find relationships for
+            max_depth: Maximum traversal depth
+            limit: Maximum number of related entities to return
+
+        Returns:
+            List of related entities with their metadata
+        """
+        if not entity_names:
+            return []
+
+        try:
+            with self.driver.session() as session:
+                # Query to find related entities through various relationship types
+                query = """
+                    MATCH (source:Chunk)
+                    WHERE source.name IN $entity_names
+                       OR source.file_path IN $entity_names
+                       OR any(name IN $entity_names WHERE source.content CONTAINS name)
+
+                    // Find related entities through different relationship types
+                    OPTIONAL MATCH (source)-[r1:CALLS|CALLED_BY|IMPORTS|IMPORTED_BY|CHILD_OF|PARENT_OF*1..2]-(related1:Chunk)
+                    OPTIONAL MATCH (source)-[r2:SIMILAR_TO|DEPENDS_ON]-(related2:Chunk)
+
+                    // Also find entities in the same file or module
+                    OPTIONAL MATCH (same_file:Chunk)
+                    WHERE same_file.file_path = source.file_path AND same_file.id <> source.id
+
+                    WITH source,
+                         collect(DISTINCT related1) + collect(DISTINCT related2) + collect(DISTINCT same_file) as all_related
+
+                    UNWIND all_related as related
+
+                    WITH source, related
+                    WHERE related IS NOT NULL
+
+                    RETURN DISTINCT
+                        related.name as name,
+                        related.node_type as type,
+                        related.file_path as file_path,
+                        related.content as content,
+                        related.start_line as start_line,
+                        related.end_line as end_line,
+                        related.id as id,
+                        // Calculate relevance score based on relationship strength
+                        CASE
+                            WHEN related.file_path = source.file_path THEN 0.9
+                            WHEN (related)-[:CALLS|CALLED_BY]-(source) THEN 0.8
+                            WHEN (related)-[:IMPORTS|IMPORTED_BY]-(source) THEN 0.7
+                            WHEN (related)-[:CHILD_OF|PARENT_OF]-(source) THEN 0.85
+                            ELSE 0.6
+                        END as relevance_score
+
+                    ORDER BY relevance_score DESC
+                    LIMIT $limit
+                """
+
+                result = session.run(query, {
+                    "entity_names": entity_names,
+                    "limit": limit
+                })
+
+                related_entities = []
+                for record in result:
+                    entity = {
+                        "name": record.get("name", ""),
+                        "type": record.get("type", ""),
+                        "file_path": record.get("file_path", ""),
+                        "content": record.get("content", "")[:200],  # Limit content preview
+                        "start_line": record.get("start_line", 0),
+                        "end_line": record.get("end_line", 0),
+                        "id": record.get("id", ""),
+                        "relevance_score": record.get("relevance_score", 0.0)
+                    }
+                    related_entities.append(entity)
+
+                logger.info(f"Found {len(related_entities)} related entities for {len(entity_names)} input entities")
+                return related_entities
+
+        except Exception as e:
+            logger.error(f"Error finding related entities: {e}")
+            return []
 
     def _identify_architectural_layer(self, file_path: str) -> str:
         """Identify the architectural layer based on file path."""

@@ -300,7 +300,94 @@ class QueryProcessor:
         entities["variables"] = [var for var in potential_vars if var.lower() not in common_words]
         
         return entities
-    
+
+    def expand_entities_with_graph(self, entities: Dict[str, List[str]], graph_service) -> Dict[str, List[str]]:
+        """
+        Expand entities using graph relationships to get broader context.
+
+        Args:
+            entities: Initially extracted entities
+            graph_service: Graph service for relationship queries
+
+        Returns:
+            Expanded entities with related components
+        """
+        expanded_entities = {
+            "functions": list(entities.get("functions", [])),
+            "classes": list(entities.get("classes", [])),
+            "files": list(entities.get("files", [])),
+            "variables": list(entities.get("variables", [])),
+            "keywords": list(entities.get("keywords", [])),
+            "related_components": []
+        }
+
+        try:
+            # For each extracted entity, find related components through graph
+            all_entity_names = []
+            for entity_type, entity_list in entities.items():
+                all_entity_names.extend(entity_list)
+
+            if all_entity_names and graph_service:
+                # Query graph for related entities
+                related_entities = graph_service.find_related_entities(all_entity_names)
+
+                # Categorize related entities
+                for related in related_entities:
+                    entity_name = related.get("name", "")
+                    entity_type = related.get("type", "")
+
+                    if entity_type == "function" and entity_name not in expanded_entities["functions"]:
+                        expanded_entities["functions"].append(entity_name)
+                    elif entity_type == "class" and entity_name not in expanded_entities["classes"]:
+                        expanded_entities["classes"].append(entity_name)
+                    elif entity_type == "file" and entity_name not in expanded_entities["files"]:
+                        expanded_entities["files"].append(entity_name)
+                    else:
+                        expanded_entities["related_components"].append(entity_name)
+
+        except Exception as e:
+            logger.warning(f"Failed to expand entities with graph: {e}")
+
+        return expanded_entities
+
+    def generate_comprehensive_search_terms(self, query: str, expanded_entities: Dict[str, List[str]]) -> List[str]:
+        """
+        Generate comprehensive search terms from query and expanded entities.
+
+        Args:
+            query: Original query
+            expanded_entities: Entities expanded with graph relationships
+
+        Returns:
+            List of search terms for embedding search
+        """
+        search_terms = [query]  # Start with original query
+
+        # Add entity-based search terms
+        for entity_type, entity_list in expanded_entities.items():
+            if entity_list:
+                # Create specific search terms for each entity type
+                if entity_type == "functions":
+                    search_terms.extend([f"function {entity}" for entity in entity_list[:5]])
+                    search_terms.extend([f"def {entity}" for entity in entity_list[:5]])
+                elif entity_type == "classes":
+                    search_terms.extend([f"class {entity}" for entity in entity_list[:5]])
+                    search_terms.extend([f"{entity} implementation" for entity in entity_list[:5]])
+                elif entity_type == "files":
+                    search_terms.extend([f"file {entity}" for entity in entity_list[:5]])
+                elif entity_type == "related_components":
+                    search_terms.extend(entity_list[:10])  # Add related components directly
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_terms = []
+        for term in search_terms:
+            if term not in seen:
+                seen.add(term)
+                unique_terms.append(term)
+
+        return unique_terms[:20]  # Limit to top 20 search terms
+
     def generate_search_filters(self, query: str, intent: QueryIntent, entities: Dict[str, List[str]]) -> Dict[str, Any]:
         """
         Generate search filters based on query analysis.

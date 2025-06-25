@@ -205,14 +205,20 @@ class AgentOrchestrator:
                 logger.info(f"Cache hit for query: {query[:50]}...")
                 return self.query_cache[cache_key]
 
-            # Smart agent selection with performance considerations
-            relevant_agents = self._select_relevant_agents_optimized(query, chunks)
+            # Check if we have intelligent agent selection from query analyzer
+            if context.get("optimization_mode") and context.get("agent_tasks"):
+                # Use intelligent agent selection
+                agent_tasks = context["agent_tasks"]
+                relevant_agents = [task.agent_role for task in agent_tasks]
+                logger.info(f"Using intelligent agent selection: {[a.value for a in relevant_agents]}")
+            else:
+                # Smart agent selection with performance considerations
+                relevant_agents = self._select_relevant_agents_optimized(query, chunks)
+                logger.info(f"Selected {len(relevant_agents)} agents: {[a.value for a in relevant_agents]}")
 
             if not relevant_agents:
                 logger.warning("No relevant agents selected for query")
                 return self._fallback_response(query, chunks)
-
-            logger.info(f"Selected {len(relevant_agents)} agents: {[a.value for a in relevant_agents]}")
 
             # Run agents with controlled concurrency
             agent_perspectives = await self._run_agents_with_concurrency_control(
@@ -289,12 +295,39 @@ class AgentOrchestrator:
         chunks: List[CodeChunk],
         context: Dict[str, Any]
     ) -> List[AgentPerspective]:
-        """Run agents with controlled concurrency to avoid overwhelming the system."""
+        """Run agents with controlled concurrency and distributed chunk analysis."""
         semaphore = asyncio.Semaphore(self.max_concurrent_agents)
+
+        # Distribute chunks among agents for diverse perspectives
+        agent_chunk_assignments = self._distribute_chunks_to_agents(agent_roles, chunks)
 
         async def run_single_agent(agent_role: AgentRole) -> AgentPerspective:
             async with semaphore:
-                return await self._run_agent_analysis(agent_role, query, chunks, context)
+                # Get the specific chunks assigned to this agent
+                assigned_chunks = agent_chunk_assignments.get(agent_role)
+
+                # If no chunks assigned, create a unique fallback for this agent
+                if not assigned_chunks:
+                    agent_index = list(agent_roles).index(agent_role)
+                    chunks_per_fallback_agent = max(15, len(chunks) // len(agent_roles))  # At least 15 chunks per agent
+                    start_idx = agent_index * chunks_per_fallback_agent
+                    end_idx = min(start_idx + chunks_per_fallback_agent, len(chunks))
+                    assigned_chunks = chunks[start_idx:end_idx]
+
+                    # If we run out of chunks, use round-robin distribution
+                    if not assigned_chunks and chunks:
+                        # Distribute remaining chunks in round-robin fashion
+                        assigned_chunks = []
+                        for i in range(agent_index, len(chunks), len(agent_roles)):
+                            assigned_chunks.append(chunks[i])
+                            if len(assigned_chunks) >= 15:  # Cap at 15 chunks
+                                break
+
+                        # Ensure minimum chunks
+                        if len(assigned_chunks) < 3 and chunks:
+                            assigned_chunks = chunks[:3]
+
+                return await self._run_agent_analysis(agent_role, query, assigned_chunks, context)
 
         # Create tasks for all agents
         tasks = [run_single_agent(agent_role) for agent_role in agent_roles]
@@ -312,6 +345,277 @@ class AgentOrchestrator:
                 self.performance_stats['agents_skipped'] += 1
 
         return valid_results
+
+    def _distribute_chunks_to_agents(
+        self,
+        agent_roles: List[AgentRole],
+        chunks: List[CodeChunk]
+    ) -> Dict[AgentRole, List[CodeChunk]]:
+        """
+        Distribute chunks among agents to ensure diverse analysis perspectives.
+        Each agent gets completely different chunks based on their specialization and architectural layers.
+        """
+        if not chunks or not agent_roles:
+            return {}
+
+        # Categorize chunks by architectural layers and file types
+        chunk_categories = self._categorize_chunks_by_architecture(chunks)
+
+        # Ensure we have enough diverse chunks
+        total_chunks = len(chunks)
+        num_agents = len(agent_roles)
+
+        # Target at least 15 chunks per agent for comprehensive analysis
+        min_chunks_per_agent = 15
+        chunks_per_agent = max(min_chunks_per_agent, total_chunks // num_agents)
+
+        # If we don't have enough chunks, we'll need to expand the search
+        if total_chunks < num_agents * min_chunks_per_agent:
+            logger.warning(f"Only {total_chunks} chunks available for {num_agents} agents. "
+                         f"Each agent needs at least {min_chunks_per_agent} chunks for comprehensive analysis.")
+            chunks_per_agent = max(3, total_chunks // num_agents)  # Minimum 3 chunks per agent
+
+        agent_assignments = {}
+        used_chunk_ids = set()
+
+        # Distribute chunks ensuring each agent gets unique architectural perspectives
+        for i, agent_role in enumerate(agent_roles):
+            # Get chunks specifically relevant to this agent's domain
+            agent_chunks = self._select_unique_chunks_for_agent(
+                agent_role, chunk_categories, chunks_per_agent, used_chunk_ids
+            )
+
+            agent_assignments[agent_role] = agent_chunks
+
+            # Track used chunks to prevent overlap using chunk IDs
+            for chunk in agent_chunks:
+                chunk_id = getattr(chunk, 'id', chunk.file_path)
+                used_chunk_ids.add(chunk_id)
+
+        # Log distribution for debugging with more detail
+        logger.info(f"Distributed {total_chunks} chunks among {num_agents} agents with architectural diversity:")
+        for agent_role, assigned_chunks in agent_assignments.items():
+            file_types = set(chunk.file_path.split('.')[-1] for chunk in assigned_chunks if '.' in chunk.file_path)
+            logger.info(f"  {agent_role.value}: {len(assigned_chunks)} chunks from {len(file_types)} file types")
+
+        return agent_assignments
+
+    def _categorize_chunks_by_architecture(self, chunks: List[CodeChunk]) -> Dict[str, List[CodeChunk]]:
+        """Categorize chunks by architectural layers and concerns."""
+        categories = {
+            'models': [],           # Data models, schemas, entities
+            'services': [],         # Business logic, services
+            'controllers': [],      # API controllers, handlers
+            'views': [],           # UI components, templates
+            'utils': [],           # Utilities, helpers
+            'config': [],          # Configuration files
+            'tests': [],           # Test files
+            'database': [],        # Database related
+            'auth': [],            # Authentication/authorization
+            'api': [],             # API definitions
+            'frontend': [],        # Frontend specific
+            'backend': [],         # Backend specific
+            'infrastructure': [],  # DevOps, deployment
+            'other': []            # Uncategorized
+        }
+
+        for chunk in chunks:
+            file_path = chunk.file_path.lower()
+            content = chunk.content.lower()
+
+            # Categorize by file path patterns
+            if any(pattern in file_path for pattern in ['model', 'entity', 'schema', 'dto']):
+                categories['models'].append(chunk)
+            elif any(pattern in file_path for pattern in ['service', 'business', 'logic']):
+                categories['services'].append(chunk)
+            elif any(pattern in file_path for pattern in ['controller', 'handler', 'endpoint', 'route']):
+                categories['controllers'].append(chunk)
+            elif any(pattern in file_path for pattern in ['view', 'component', 'template', 'ui']):
+                categories['views'].append(chunk)
+            elif any(pattern in file_path for pattern in ['util', 'helper', 'tool']):
+                categories['utils'].append(chunk)
+            elif any(pattern in file_path for pattern in ['config', 'setting', 'env']):
+                categories['config'].append(chunk)
+            elif any(pattern in file_path for pattern in ['test', 'spec']):
+                categories['tests'].append(chunk)
+            elif any(pattern in file_path for pattern in ['db', 'database', 'migration', 'sql']):
+                categories['database'].append(chunk)
+            elif any(pattern in file_path for pattern in ['auth', 'login', 'security', 'permission']):
+                categories['auth'].append(chunk)
+            elif any(pattern in file_path for pattern in ['api', 'rest', 'graphql']):
+                categories['api'].append(chunk)
+            elif any(pattern in file_path for pattern in ['frontend', 'client', 'web', 'react', 'vue', 'angular']):
+                categories['frontend'].append(chunk)
+            elif any(pattern in file_path for pattern in ['backend', 'server', 'src']):
+                categories['backend'].append(chunk)
+            elif any(pattern in file_path for pattern in ['docker', 'deploy', 'infra', 'k8s', 'terraform']):
+                categories['infrastructure'].append(chunk)
+            else:
+                # Categorize by content patterns if file path doesn't match
+                if any(pattern in content for pattern in ['class ', 'def __init__', 'model', 'schema']):
+                    categories['models'].append(chunk)
+                elif any(pattern in content for pattern in ['service', 'business', 'process']):
+                    categories['services'].append(chunk)
+                elif any(pattern in content for pattern in ['@app.route', '@router', 'fastapi', 'flask']):
+                    categories['controllers'].append(chunk)
+                elif any(pattern in content for pattern in ['render', 'template', 'component']):
+                    categories['views'].append(chunk)
+                else:
+                    categories['other'].append(chunk)
+
+        return categories
+
+    def _select_unique_chunks_for_agent(
+        self,
+        agent_role: AgentRole,
+        chunk_categories: Dict[str, List[CodeChunk]],
+        target_count: int,
+        used_indices: set
+    ) -> List[CodeChunk]:
+        """Select unique chunks for an agent based on their specialization and architectural focus."""
+        # Define which architectural categories each agent should focus on
+        agent_category_preferences = {
+            AgentRole.ARCHITECT: ['models', 'services', 'controllers', 'config'],
+            AgentRole.DEVELOPER: ['utils', 'backend', 'other', 'services'],
+            AgentRole.SECURITY: ['auth', 'api', 'config', 'controllers'],
+            AgentRole.PERFORMANCE: ['database', 'backend', 'services', 'utils'],
+            AgentRole.MAINTAINER: ['tests', 'utils', 'config', 'other'],
+            AgentRole.BUSINESS: ['models', 'services', 'controllers', 'api'],
+            AgentRole.INTEGRATION: ['api', 'services', 'config', 'infrastructure'],
+            AgentRole.DATA: ['models', 'database', 'services', 'backend'],
+            AgentRole.UI_UX: ['views', 'frontend', 'other', 'utils'],
+            AgentRole.DEVOPS: ['infrastructure', 'config', 'database', 'backend'],
+            AgentRole.TESTING: ['tests', 'services', 'controllers', 'utils'],
+            AgentRole.COMPLIANCE: ['config', 'auth', 'models', 'api']
+        }
+
+        preferred_categories = agent_category_preferences.get(agent_role, ['other'])
+        selected_chunks = []
+
+        # Create a flat list of all available chunks with their IDs
+        all_available_chunks = []
+        seen_chunk_ids = set()
+
+        for category in preferred_categories:
+            if category in chunk_categories:
+                for chunk in chunk_categories[category]:
+                    chunk_id = getattr(chunk, 'id', chunk.file_path)
+                    if chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        all_available_chunks.append(chunk)
+
+        # Add chunks from other categories if needed for diversity
+        for category, chunks in chunk_categories.items():
+            if category not in preferred_categories:
+                for chunk in chunks:
+                    chunk_id = getattr(chunk, 'id', chunk.file_path)
+                    if chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        all_available_chunks.append(chunk)
+
+        # Select chunks that haven't been used by other agents
+        for chunk in all_available_chunks:
+            if len(selected_chunks) >= target_count:
+                break
+
+            chunk_id = getattr(chunk, 'id', chunk.file_path)
+
+            # Check if this chunk has already been assigned to another agent
+            if chunk_id not in used_indices:
+                selected_chunks.append(chunk)
+
+        return selected_chunks[:target_count]
+
+    def _select_chunks_for_agent(
+        self,
+        agent_role: AgentRole,
+        all_chunks: List[CodeChunk],
+        start_idx: int,
+        target_count: int,
+        used_indices: set
+    ) -> List[CodeChunk]:
+        """
+        Select chunks most relevant to the agent's specialization.
+        """
+        agent_config = self.agents.get(agent_role, {})
+        agent_keywords = agent_config.get("keywords", [])
+
+        # Score chunks based on relevance to agent
+        chunk_scores = []
+        for i, chunk in enumerate(all_chunks):
+            score = self._calculate_chunk_relevance_for_agent(chunk, agent_keywords)
+            # Prefer unused chunks but allow some overlap
+            if i not in used_indices:
+                score += 0.2  # Bonus for unused chunks
+            chunk_scores.append((i, chunk, score))
+
+        # Sort by relevance score
+        chunk_scores.sort(key=lambda x: x[2], reverse=True)
+
+        # Select top chunks, ensuring we get the target count
+        selected_chunks = []
+        selected_count = 0
+
+        # First, try to get chunks starting from the calculated start position
+        for i in range(start_idx, min(start_idx + target_count, len(all_chunks))):
+            if selected_count < target_count:
+                selected_chunks.append(all_chunks[i])
+                selected_count += 1
+
+        # If we need more chunks, select from the highest scoring remaining chunks
+        if selected_count < target_count:
+            for idx, chunk, score in chunk_scores:
+                if chunk not in selected_chunks and selected_count < target_count:
+                    selected_chunks.append(chunk)
+                    selected_count += 1
+
+        return selected_chunks[:target_count]
+
+    def _calculate_chunk_relevance_for_agent(
+        self,
+        chunk: CodeChunk,
+        agent_keywords: List[str]
+    ) -> float:
+        """Calculate how relevant a chunk is to a specific agent."""
+        if not agent_keywords:
+            return 0.5  # Neutral score
+
+        content_lower = chunk.content.lower()
+        file_path_lower = chunk.file_path.lower()
+
+        score = 0.0
+        keyword_matches = 0
+
+        for keyword in agent_keywords:
+            keyword_lower = keyword.lower()
+
+            # Check content
+            if keyword_lower in content_lower:
+                score += 1.0
+                keyword_matches += 1
+
+            # Check file path
+            if keyword_lower in file_path_lower:
+                score += 0.5
+                keyword_matches += 1
+
+        # Normalize score
+        if keyword_matches > 0:
+            score = score / len(agent_keywords)
+
+        # Add bonus for certain node types based on agent specialization
+        node_type_bonus = {
+            AgentRole.ARCHITECT: {"class": 0.3, "module": 0.3, "interface": 0.2},
+            AgentRole.DEVELOPER: {"function": 0.3, "method": 0.3, "class": 0.2},
+            AgentRole.SECURITY: {"function": 0.2, "method": 0.2, "class": 0.1},
+            AgentRole.PERFORMANCE: {"function": 0.3, "method": 0.3, "loop": 0.2},
+        }
+
+        if hasattr(chunk, 'node_type') and chunk.node_type:
+            bonus_map = node_type_bonus.get(AgentRole.ARCHITECT, {})  # Default fallback
+            score += bonus_map.get(chunk.node_type.lower(), 0.0)
+
+        return min(score, 2.0)  # Cap at 2.0
 
     def _select_relevant_agents_optimized(self, query: str, chunks: List[CodeChunk]) -> List[AgentRole]:
         """Optimized agent selection with dynamic thresholds and early termination."""
@@ -528,7 +832,7 @@ class AgentOrchestrator:
         code_context = self._prepare_code_context_for_agent(chunks, agent_role)
         
         # Build agent-specific prompt
-        prompt = self._build_agent_prompt(agent_role, agent_config, query, code_context, context)
+        prompt = self._build_agent_prompt(agent_role, agent_config, query, code_context, context, chunks)
         
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
@@ -539,153 +843,289 @@ class AgentOrchestrator:
             temperature=0.4,
             max_tokens=800
         )
-        
+
         analysis_text = response.choices[0].message.content.strip()
-        
+
+        # Log the raw LLM response for debugging
+        logger.debug(f"Raw LLM response for {agent_role.value}:")
+        logger.debug(f"Response length: {len(analysis_text)} characters")
+        logger.debug(f"First 500 chars: {analysis_text[:500]}")
+        logger.debug(f"Last 200 chars: {analysis_text[-200:]}")
+
         # Parse the structured response
         return self._parse_agent_response(agent_role, analysis_text)
     
     def _build_agent_prompt(
-        self, 
-        agent_role: AgentRole, 
-        agent_config: Dict[str, Any], 
-        query: str, 
-        code_context: str, 
-        context: Dict[str, Any]
+        self,
+        agent_role: AgentRole,
+        agent_config: Dict[str, Any],
+        query: str,
+        code_context: str,
+        context: Dict[str, Any],
+        chunks: List[CodeChunk] = None
     ) -> str:
         """Build a specialized prompt for each agent role."""
-        
+
+        # Extract specific code elements for more detailed analysis
+        code_files = self._extract_code_files(code_context)
+        functions = self._extract_functions(code_context)
+        classes = self._extract_classes(code_context)
+
+        # Count chunks for analysis context
+        chunk_count = len(chunks) if chunks else 0
+
         base_context = f"""
-AGENT ROLE: {agent_role.value.title()}
-FOCUS AREA: {agent_config['focus']}
-PERSPECTIVE: Analyze from the {agent_config['perspective']} viewpoint
+AGENT ROLE: {agent_role.value.title()} Expert
+SPECIALIZATION: {agent_config['focus']}
+PERSPECTIVE: {agent_config['perspective']} analysis
 
 USER QUERY: "{query}"
 
-CODE CONTEXT:
+CODE ANALYSIS CONTEXT:
+Code chunks analyzed: {chunk_count} unique chunks
+Files analyzed: {len(code_files)} files
+Functions found: {len(functions)} functions
+Classes found: {len(classes)} classes
+
+DETAILED CODE CONTEXT:
 {code_context}
+
+SPECIFIC CODE ELEMENTS IDENTIFIED:
+Files: {', '.join(code_files[:5])}{'...' if len(code_files) > 5 else ''}
+Key Functions: {', '.join(functions[:8])}{'...' if len(functions) > 8 else ''}
+Key Classes: {', '.join(classes[:5])}{'...' if len(classes) > 5 else ''}
 """
         
         role_specific_instructions = {
             AgentRole.ARCHITECT: """
-Analyze the system architecture and design patterns. Focus on:
-- Overall system structure and component organization
-- Architectural patterns and design principles used
-- Component relationships and dependencies
-- Scalability and extensibility considerations
-- Design trade-offs and architectural decisions
+As a Senior Software Architect, conduct a comprehensive architectural analysis:
 
-Provide insights on how the architecture supports the system's goals.
+CORE ANALYSIS AREAS:
+- System Architecture: Analyze overall system structure, layering, and component organization
+- Design Patterns: Identify architectural patterns (MVC, microservices, event-driven, etc.)
+- Component Relationships: Map dependencies, interfaces, and communication patterns
+- Scalability Design: Evaluate horizontal/vertical scaling capabilities and bottlenecks
+- Extensibility: Assess how easily new features or components can be added
+- Technology Stack: Analyze technology choices and their architectural implications
+
+ADVANCED CONSIDERATIONS:
+- Cross-cutting concerns (logging, security, caching, error handling)
+- Data flow architecture and information management
+- Service boundaries and domain separation
+- Integration patterns and external system interactions
+- Deployment architecture and infrastructure requirements
+- Performance implications of architectural decisions
+
+Provide strategic insights on architectural strengths, weaknesses, and evolution paths.
 """,
             AgentRole.DEVELOPER: """
-Analyze the code implementation and development practices. Focus on:
-- Code quality and implementation patterns
-- Algorithm efficiency and data structure choices
-- Coding standards and best practices adherence
-- Error handling and edge case management
-- Code organization and modularity
+As a Senior Software Developer, conduct a deep technical implementation analysis:
 
-Provide insights on the technical implementation quality.
+CODE QUALITY ANALYSIS:
+- Implementation Patterns: Analyze coding patterns, algorithms, and data structures
+- Code Organization: Evaluate modularity, separation of concerns, and code structure
+- Best Practices: Assess adherence to SOLID principles, DRY, KISS, and language-specific conventions
+- Error Handling: Analyze exception handling, validation, and edge case management
+- Resource Management: Evaluate memory usage, connection handling, and cleanup patterns
+
+TECHNICAL IMPLEMENTATION:
+- Algorithm Efficiency: Analyze time/space complexity and optimization opportunities
+- Concurrency Handling: Evaluate thread safety, async patterns, and parallel processing
+- API Design: Assess interface design, parameter validation, and return value handling
+- Code Reusability: Identify opportunities for abstraction and component reuse
+- Technical Debt: Spot code smells, anti-patterns, and refactoring opportunities
+
+Focus on actionable improvements that enhance code quality, maintainability, and performance.
 """,
             AgentRole.SECURITY: """
-Analyze security aspects and potential vulnerabilities. Focus on:
-- Authentication and authorization mechanisms
-- Input validation and sanitization
-- Data protection and encryption usage
-- Access control and permission management
-- Potential security vulnerabilities and risks
+As a Security Engineer, conduct a comprehensive security analysis:
 
-Provide insights on security posture and recommendations.
+SECURITY FUNDAMENTALS:
+- Authentication & Authorization: Analyze user verification and access control mechanisms
+- Input Validation: Evaluate data sanitization, injection prevention, and boundary checks
+- Data Protection: Assess encryption, hashing, and sensitive data handling
+- Session Management: Analyze session security, token handling, and state management
+- Access Control: Evaluate permission systems and privilege escalation prevention
+
+VULNERABILITY ASSESSMENT:
+- Common Vulnerabilities: Check for OWASP Top 10 and language-specific security issues
+- Configuration Security: Analyze security configurations and hardening measures
+- Dependency Security: Assess third-party library vulnerabilities and update practices
+- Communication Security: Evaluate TLS/SSL usage, certificate management, and secure protocols
+- Audit & Logging: Analyze security event logging and monitoring capabilities
+
+Provide specific security recommendations with risk assessments and mitigation strategies.
 """,
             AgentRole.PERFORMANCE: """
-Analyze performance characteristics and optimization opportunities. Focus on:
-- Performance bottlenecks and optimization opportunities
-- Resource utilization (CPU, memory, I/O)
-- Scalability limitations and solutions
-- Caching strategies and efficiency improvements
-- Database query optimization and indexing
+As a Performance Engineer, conduct a comprehensive performance analysis:
 
-Provide insights on performance optimization potential.
+PERFORMANCE CHARACTERISTICS:
+- Bottleneck Identification: Analyze CPU, memory, I/O, and network performance constraints
+- Algorithm Efficiency: Evaluate computational complexity and optimization opportunities
+- Resource Utilization: Assess memory usage patterns, garbage collection, and resource leaks
+- Concurrency Performance: Analyze parallel processing, thread contention, and async patterns
+- Database Performance: Evaluate query efficiency, indexing strategies, and connection pooling
+
+OPTIMIZATION OPPORTUNITIES:
+- Caching Strategies: Analyze caching layers, cache hit rates, and invalidation patterns
+- Load Balancing: Evaluate distribution strategies and scaling approaches
+- Code Optimization: Identify hot paths, inefficient loops, and optimization opportunities
+- Infrastructure Performance: Assess deployment architecture and infrastructure bottlenecks
+- Monitoring & Profiling: Evaluate performance measurement and monitoring capabilities
+
+Provide data-driven performance improvement recommendations with expected impact.
 """,
             AgentRole.MAINTAINER: """
-Analyze maintainability and long-term code health. Focus on:
-- Code complexity and maintainability metrics
-- Technical debt and refactoring opportunities
-- Documentation quality and completeness
-- Testing coverage and quality
-- Code organization and modularity for maintenance
+As a Technical Lead focused on maintainability, conduct a comprehensive code health analysis:
 
-Provide insights on long-term maintainability and health.
+MAINTAINABILITY ASSESSMENT:
+- Code Complexity: Analyze cyclomatic complexity, nesting levels, and cognitive load
+- Technical Debt: Identify code smells, anti-patterns, and areas requiring refactoring
+- Documentation Quality: Evaluate code comments, API documentation, and knowledge transfer
+- Testing Coverage: Assess test quality, coverage metrics, and testing strategies
+- Code Organization: Analyze module structure, dependency management, and architectural clarity
+
+LONG-TERM HEALTH:
+- Evolution Capability: Assess how easily the codebase can adapt to changing requirements
+- Knowledge Distribution: Evaluate bus factor and knowledge concentration risks
+- Refactoring Opportunities: Identify areas for improvement and modernization
+- Dependency Management: Analyze third-party dependencies and update strategies
+- Development Workflow: Evaluate development practices and team collaboration patterns
+
+Focus on sustainable development practices and long-term codebase health.
 """,
             AgentRole.BUSINESS: """
-Analyze business logic and domain modeling. Focus on:
-- Business rule implementation and clarity
-- Domain model accuracy and completeness
-- Functional requirement fulfillment
-- Business process automation and efficiency
-- User experience and business value delivery
+As a Business Analyst with technical expertise, conduct a comprehensive business logic analysis:
 
-Provide insights on business logic implementation and domain understanding.
+BUSINESS LOGIC EVALUATION:
+- Domain Modeling: Analyze how business concepts are represented in code
+- Business Rules: Evaluate implementation of business rules and validation logic
+- Workflow Implementation: Assess business process automation and workflow management
+- Data Integrity: Analyze business data validation and consistency enforcement
+- User Experience: Evaluate how technical implementation supports user needs
+
+BUSINESS VALUE ASSESSMENT:
+- Requirement Fulfillment: Assess how well the code meets functional requirements
+- Business Process Support: Evaluate automation of business processes and efficiency gains
+- Stakeholder Value: Analyze value delivery to different user groups and stakeholders
+- Compliance & Governance: Assess adherence to business policies and regulatory requirements
+- ROI Considerations: Evaluate technical decisions from a business value perspective
+
+Provide insights on business-technical alignment and value optimization opportunities.
 """,
             AgentRole.INTEGRATION: """
-Analyze system integration and external dependencies. Focus on:
-- External service integrations and API usage
-- Dependency management and version control
-- Inter-service communication patterns
-- Data flow between system components
-- Integration testing and error handling
+As an Integration Architect, conduct a comprehensive system integration analysis:
 
-Provide insights on integration architecture and dependency management.
+INTEGRATION ARCHITECTURE:
+- External Dependencies: Analyze third-party service integrations and API usage patterns
+- Communication Patterns: Evaluate synchronous/asynchronous communication and messaging
+- Data Exchange: Assess data transformation, serialization, and protocol handling
+- Service Boundaries: Analyze microservice boundaries and inter-service communication
+- API Design: Evaluate REST/GraphQL/gRPC implementations and versioning strategies
+
+INTEGRATION QUALITY:
+- Error Handling: Analyze failure scenarios, retry logic, and circuit breaker patterns
+- Monitoring & Observability: Evaluate integration monitoring and distributed tracing
+- Performance: Assess integration performance, latency, and throughput characteristics
+- Security: Analyze authentication, authorization, and secure communication patterns
+- Resilience: Evaluate fault tolerance, graceful degradation, and recovery mechanisms
+
+Focus on integration reliability, maintainability, and operational excellence.
 """,
             AgentRole.DATA: """
-Analyze data architecture and information management. Focus on:
-- Database design and schema optimization
-- Data modeling and relationships
-- Query performance and indexing strategies
-- Data flow and transformation processes
-- Storage optimization and data lifecycle management
+As a Data Architect, conduct a comprehensive data architecture analysis:
 
-Provide insights on data architecture and information management strategies.
+DATA ARCHITECTURE:
+- Data Modeling: Analyze entity relationships, schema design, and normalization strategies
+- Database Design: Evaluate table structures, indexing strategies, and query optimization
+- Data Flow: Assess data movement, transformation pipelines, and ETL processes
+- Storage Strategy: Analyze data storage patterns, partitioning, and archival strategies
+- Data Consistency: Evaluate ACID properties, transaction management, and consistency models
+
+DATA MANAGEMENT:
+- Performance Optimization: Analyze query performance, indexing effectiveness, and caching
+- Scalability: Evaluate data scaling strategies and distributed data management
+- Data Quality: Assess validation, cleansing, and data integrity mechanisms
+- Backup & Recovery: Analyze data protection, backup strategies, and disaster recovery
+- Compliance: Evaluate data privacy, retention policies, and regulatory compliance
+
+Provide insights on data architecture optimization and management best practices.
 """,
             AgentRole.UI_UX: """
-Analyze user interface and experience design. Focus on:
-- Component architecture and reusability
-- User interaction patterns and workflows
-- Frontend performance and optimization
-- Accessibility and usability considerations
-- State management and data binding
+As a Frontend Architect with UX expertise, conduct a comprehensive UI/UX analysis:
 
-Provide insights on user interface design and frontend architecture.
+FRONTEND ARCHITECTURE:
+- Component Design: Analyze component architecture, reusability, and composition patterns
+- State Management: Evaluate state management patterns and data flow architecture
+- Performance: Assess frontend performance, bundle optimization, and loading strategies
+- Accessibility: Analyze WCAG compliance and inclusive design implementation
+- Responsive Design: Evaluate multi-device support and adaptive layouts
+
+USER EXPERIENCE:
+- Interaction Patterns: Analyze user workflows, navigation, and interaction design
+- Usability: Evaluate ease of use, error prevention, and user feedback mechanisms
+- Performance UX: Assess perceived performance, loading states, and user feedback
+- Design System: Analyze consistency, design tokens, and component standardization
+- User Journey: Evaluate end-to-end user experience and conversion optimization
+
+Focus on technical implementation that enhances user experience and frontend maintainability.
 """,
             AgentRole.DEVOPS: """
-Analyze deployment and operational considerations. Focus on:
-- Infrastructure as code and deployment strategies
-- Containerization and orchestration patterns
-- CI/CD pipeline design and automation
-- Monitoring, logging, and observability
-- Scalability and reliability considerations
+As a DevOps Engineer, conduct a comprehensive operational analysis:
 
-Provide insights on deployment and operational excellence.
+DEPLOYMENT & INFRASTRUCTURE:
+- Infrastructure as Code: Analyze infrastructure automation and configuration management
+- Containerization: Evaluate Docker, Kubernetes, and container orchestration patterns
+- CI/CD Pipeline: Assess build, test, and deployment automation and pipeline efficiency
+- Environment Management: Analyze environment consistency and configuration management
+- Scalability: Evaluate auto-scaling, load balancing, and capacity management
+
+OPERATIONAL EXCELLENCE:
+- Monitoring & Observability: Analyze logging, metrics, tracing, and alerting systems
+- Reliability: Evaluate SLA/SLO compliance, error budgets, and incident response
+- Security Operations: Assess security scanning, vulnerability management, and compliance
+- Performance Monitoring: Analyze application and infrastructure performance monitoring
+- Disaster Recovery: Evaluate backup strategies, failover mechanisms, and recovery procedures
+
+Provide insights on operational efficiency, reliability, and automation opportunities.
 """,
             AgentRole.TESTING: """
-Analyze testing strategy and quality assurance. Focus on:
-- Test coverage and testing pyramid implementation
-- Unit, integration, and end-to-end testing strategies
-- Test automation and continuous testing
-- Quality gates and code quality metrics
-- Performance and load testing considerations
+As a Quality Assurance Engineer, conduct a comprehensive testing analysis:
 
-Provide insights on testing strategy and quality assurance practices.
+TESTING STRATEGY:
+- Test Coverage: Analyze unit, integration, and end-to-end test coverage and effectiveness
+- Test Architecture: Evaluate test organization, test data management, and test environments
+- Automation: Assess test automation strategies, frameworks, and CI/CD integration
+- Quality Gates: Analyze quality metrics, code coverage thresholds, and release criteria
+- Testing Pyramid: Evaluate balance between unit, integration, and UI tests
+
+QUALITY ASSURANCE:
+- Bug Prevention: Analyze static analysis, linting, and code quality tools
+- Performance Testing: Evaluate load testing, stress testing, and performance benchmarks
+- Security Testing: Assess security testing practices and vulnerability scanning
+- Usability Testing: Analyze user acceptance testing and usability validation
+- Regression Testing: Evaluate regression test strategies and change impact analysis
+
+Focus on comprehensive quality assurance and testing optimization strategies.
 """,
             AgentRole.COMPLIANCE: """
-Analyze compliance and regulatory requirements. Focus on:
-- Regulatory compliance and standards adherence
-- Data privacy and protection requirements
-- Audit trails and documentation standards
-- Security compliance and risk management
-- Policy enforcement and governance frameworks
+As a Compliance Officer with technical expertise, conduct a comprehensive compliance analysis:
 
-Provide insights on compliance requirements and risk mitigation.
+REGULATORY COMPLIANCE:
+- Data Privacy: Analyze GDPR, CCPA, and other privacy regulation compliance
+- Industry Standards: Evaluate adherence to industry-specific regulations (HIPAA, PCI-DSS, SOX)
+- Security Compliance: Assess security frameworks (ISO 27001, NIST, SOC 2) implementation
+- Audit Requirements: Analyze audit trail capabilities and compliance reporting
+- Documentation: Evaluate compliance documentation and policy enforcement
+
+GOVERNANCE & RISK:
+- Risk Assessment: Analyze technical risks and mitigation strategies
+- Policy Enforcement: Evaluate automated policy enforcement and compliance monitoring
+- Access Control: Assess role-based access control and privilege management
+- Data Governance: Analyze data classification, retention, and lifecycle management
+- Change Management: Evaluate change control processes and compliance impact assessment
+
+Provide insights on compliance gaps, risk mitigation, and governance improvements.
 """
         }
         
@@ -699,65 +1139,260 @@ Provide insights on compliance requirements and risk mitigation.
 
 {specific_instructions}
 
-Please provide your analysis in the following format:
+ANALYSIS METHODOLOGY FOR {agent_role.value.upper()} PERSPECTIVE:
 
-ANALYSIS:
-[Your detailed analysis from your role's perspective - 2-3 paragraphs]
+You are analyzing {chunk_count} unique code chunks that have been specifically selected for your expertise area. Each chunk represents a different aspect of the codebase to ensure comprehensive coverage.
+
+ANALYSIS REQUIREMENTS:
+- Conduct deep, technical analysis beyond surface-level observations
+- Synthesize insights across all provided code chunks to identify patterns and relationships
+- Focus on systemic issues and opportunities rather than isolated code snippets
+- Provide evidence-based conclusions with specific code references
+- Consider the broader architectural context and implications
+- Identify both immediate issues and strategic considerations
+
+RESPONSE STRUCTURE:
+
+EXECUTIVE SUMMARY:
+[2-3 sentences summarizing your key findings and overall assessment from your specialized perspective]
+
+DETAILED ANALYSIS:
+[Comprehensive analysis covering:]
+- Primary findings from your specialized domain
+- Cross-cutting patterns observed across the code chunks
+- Systemic strengths and weaknesses identified
+- Technical implications and architectural considerations
+- Integration with broader system context
 
 KEY INSIGHTS:
-- [Insight 1]
-- [Insight 2] 
-- [Insight 3]
+- [Strategic insight with architectural/business implications]
+- [Technical pattern or anti-pattern with system-wide impact]
+- [Critical finding that affects multiple components or layers]
+- [Opportunity for significant improvement or optimization]
 
 RECOMMENDATIONS:
-- [Recommendation 1]
-- [Recommendation 2]
-- [Recommendation 3]
+- [High-impact recommendation with implementation approach and expected benefits]
+- [Strategic improvement with timeline and resource considerations]
+- [Technical enhancement with specific steps and success metrics]
 
-CONFIDENCE: [High/Medium/Low]
+RISK ASSESSMENT:
+- [Critical risks identified in your domain area]
+- [Potential impact and likelihood assessment]
+- [Mitigation strategies and preventive measures]
 
-FOCUS AREAS:
-- [Area 1]
-- [Area 2]
+CONFIDENCE: [High/Medium/Low] - [Detailed reasoning based on code coverage, complexity, and domain expertise]
+
+FOCUS AREAS FOR IMMEDIATE ATTENTION:
+- [Priority 1: Critical issue requiring immediate action]
+- [Priority 2: Important improvement with significant impact]
+- [Priority 3: Enhancement opportunity for future consideration]
+
+Remember: Your analysis should demonstrate deep domain expertise and provide actionable insights that go beyond obvious observations. Focus on value-driven recommendations that align with business and technical objectives.
 """
 
     def _prepare_code_context_for_agent(self, chunks: List[CodeChunk], agent_role: AgentRole) -> str:
-        """Prepare code context tailored for specific agent perspective."""
+        """Prepare code context tailored for specific agent perspective with comprehensive chunk analysis."""
         context_parts = []
 
-        # Limit chunks to avoid token overflow
-        relevant_chunks = chunks[:3]
+        # Use all assigned chunks for this agent (should be 10+ unique chunks)
+        # Increase content limit for better analysis
+        max_content_per_chunk = 1500
 
-        for i, chunk in enumerate(relevant_chunks):
+        # Add architectural context summary first
+        architectural_summary = self._generate_architectural_summary(chunks, agent_role)
+        if architectural_summary:
+            context_parts.append(f"ARCHITECTURAL CONTEXT:\n{architectural_summary}\n")
+
+        for i, chunk in enumerate(chunks):
+            # Extract more detailed metadata for better analysis
+            chunk_metadata = self._extract_chunk_metadata(chunk)
+
             chunk_info = f"""
 CODE CHUNK {i+1}:
 File: {chunk.file_path}
 Lines: {chunk.start_line}-{chunk.end_line}
 Type: {chunk.node_type.value if chunk.node_type else 'unknown'}
 Name: {chunk.name or 'unnamed'}
+Metadata: {chunk_metadata}
 
 Content:
-{chunk.content[:1000]}{'...' if len(chunk.content) > 1000 else ''}
+{chunk.content[:max_content_per_chunk]}{'...' if len(chunk.content) > max_content_per_chunk else ''}
 """
             context_parts.append(chunk_info)
 
         return "\n".join(context_parts)
 
+    def _generate_architectural_summary(self, chunks: List[CodeChunk], agent_role: AgentRole) -> str:
+        """Generate architectural summary relevant to the agent's perspective."""
+        if not chunks:
+            return ""
+
+        # Analyze file patterns and architectural layers
+        file_patterns = {}
+        for chunk in chunks:
+            file_path = chunk.file_path.lower()
+
+            # Categorize by architectural patterns
+            if any(pattern in file_path for pattern in ['model', 'entity', 'schema']):
+                file_patterns['data_layer'] = file_patterns.get('data_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['service', 'business', 'logic']):
+                file_patterns['business_layer'] = file_patterns.get('business_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['controller', 'handler', 'api', 'route']):
+                file_patterns['api_layer'] = file_patterns.get('api_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['view', 'component', 'ui', 'frontend']):
+                file_patterns['presentation_layer'] = file_patterns.get('presentation_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['util', 'helper', 'common']):
+                file_patterns['utility_layer'] = file_patterns.get('utility_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['config', 'setting', 'env']):
+                file_patterns['config_layer'] = file_patterns.get('config_layer', 0) + 1
+            elif any(pattern in file_path for pattern in ['test', 'spec']):
+                file_patterns['test_layer'] = file_patterns.get('test_layer', 0) + 1
+
+        # Generate role-specific architectural insights
+        summary_parts = []
+
+        if file_patterns:
+            summary_parts.append(f"Analyzing {len(chunks)} code chunks across {len(file_patterns)} architectural layers:")
+            for layer, count in file_patterns.items():
+                summary_parts.append(f"- {layer.replace('_', ' ').title()}: {count} chunks")
+
+        # Add role-specific context
+        role_context = {
+            AgentRole.ARCHITECT: "Focus on system structure, component relationships, and design patterns",
+            AgentRole.DEVELOPER: "Focus on implementation quality, algorithms, and coding practices",
+            AgentRole.SECURITY: "Focus on authentication, authorization, and vulnerability patterns",
+            AgentRole.PERFORMANCE: "Focus on optimization opportunities, bottlenecks, and scalability",
+            AgentRole.MAINTAINER: "Focus on code complexity, technical debt, and maintainability",
+            AgentRole.BUSINESS: "Focus on business logic, domain modeling, and functional requirements",
+            AgentRole.INTEGRATION: "Focus on external dependencies, APIs, and system integration",
+            AgentRole.DATA: "Focus on data models, database design, and information architecture",
+            AgentRole.UI_UX: "Focus on user interface components, interactions, and frontend architecture",
+            AgentRole.DEVOPS: "Focus on deployment, infrastructure, and operational considerations",
+            AgentRole.TESTING: "Focus on test coverage, quality assurance, and testing strategies",
+            AgentRole.COMPLIANCE: "Focus on regulatory requirements, security compliance, and governance"
+        }
+
+        if agent_role in role_context:
+            summary_parts.append(f"\nYour {agent_role.value} perspective: {role_context[agent_role]}")
+
+        return "\n".join(summary_parts)
+
+    def _extract_chunk_metadata(self, chunk: CodeChunk) -> str:
+        """Extract detailed metadata from a code chunk for better analysis."""
+        metadata_parts = []
+
+        # Analyze content patterns
+        content = chunk.content.lower()
+
+        # Detect programming constructs
+        constructs = []
+        if 'class ' in content:
+            constructs.append('classes')
+        if 'def ' in content or 'function ' in content:
+            constructs.append('functions')
+        if 'import ' in content or 'from ' in content:
+            constructs.append('imports')
+        if 'async ' in content:
+            constructs.append('async_code')
+        if 'try:' in content or 'except' in content:
+            constructs.append('error_handling')
+        if 'test' in content or 'assert' in content:
+            constructs.append('testing')
+        if any(db_term in content for db_term in ['select', 'insert', 'update', 'delete', 'query']):
+            constructs.append('database_operations')
+        if any(api_term in content for api_term in ['@app.route', '@router', 'fastapi', 'flask', 'request', 'response']):
+            constructs.append('api_endpoints')
+
+        if constructs:
+            metadata_parts.append(f"Contains: {', '.join(constructs)}")
+
+        # Estimate complexity
+        lines = len(chunk.content.split('\n'))
+        if lines > 100:
+            metadata_parts.append("High complexity (100+ lines)")
+        elif lines > 50:
+            metadata_parts.append("Medium complexity (50+ lines)")
+        else:
+            metadata_parts.append("Low complexity (<50 lines)")
+
+        return "; ".join(metadata_parts) if metadata_parts else "Basic code structure"
+
+    def _extract_code_files(self, code_context: str) -> List[str]:
+        """Extract file names from code context."""
+        files = []
+        for line in code_context.split('\n'):
+            if line.strip().startswith('File:'):
+                file_path = line.split('File:', 1)[1].strip()
+                if file_path:
+                    # Extract just the filename for readability
+                    filename = file_path.split('/')[-1] if '/' in file_path else file_path.split('\\')[-1]
+                    files.append(filename)
+        return list(set(files))  # Remove duplicates
+
+    def _extract_functions(self, code_context: str) -> List[str]:
+        """Extract function names from code context."""
+        functions = []
+        for line in code_context.split('\n'):
+            # Look for function definitions
+            if 'def ' in line:
+                # Extract function name
+                try:
+                    func_part = line.split('def ')[1].split('(')[0].strip()
+                    if func_part and func_part.isidentifier():
+                        functions.append(func_part)
+                except:
+                    pass
+            # Look for async function definitions
+            if 'async def ' in line:
+                try:
+                    func_part = line.split('async def ')[1].split('(')[0].strip()
+                    if func_part and func_part.isidentifier():
+                        functions.append(f"async {func_part}")
+                except:
+                    pass
+        return list(set(functions))  # Remove duplicates
+
+    def _extract_classes(self, code_context: str) -> List[str]:
+        """Extract class names from code context."""
+        classes = []
+        for line in code_context.split('\n'):
+            if 'class ' in line:
+                try:
+                    class_part = line.split('class ')[1].split('(')[0].split(':')[0].strip()
+                    if class_part and class_part.isidentifier():
+                        classes.append(class_part)
+                except:
+                    pass
+        return list(set(classes))  # Remove duplicates
+
     def _parse_agent_response(self, agent_role: AgentRole, response_text: str) -> AgentPerspective:
         """Parse structured agent response into AgentPerspective object."""
         try:
-            # Extract sections using simple parsing
+            # Log the raw response for debugging
+            logger.debug(f"Parsing {agent_role.value} response: {response_text[:200]}...")
+            logger.debug(f"Full response text: {response_text}")
+
+            # Extract sections using improved parsing
             sections = {}
             current_section = None
             current_content = []
 
             for line in response_text.split('\n'):
                 line = line.strip()
-                if line.upper().startswith(('ANALYSIS:', 'KEY INSIGHTS:', 'RECOMMENDATIONS:', 'CONFIDENCE:', 'FOCUS AREAS:')):
+                # Match the actual section headers from the LLM response
+                section_headers = [
+                    '### EXECUTIVE SUMMARY:', '### DETAILED ANALYSIS:', '### ANALYSIS:',
+                    '### KEY INSIGHTS:', '### RECOMMENDATIONS:', '### RISK ASSESSMENT:',
+                    '### CONFIDENCE:', '### FOCUS AREAS FOR IMMEDIATE ATTENTION:', '### FOCUS AREAS:'
+                ]
+
+                if any(line.startswith(header) for header in section_headers):
                     if current_section:
                         sections[current_section] = '\n'.join(current_content).strip()
-                    current_section = line.split(':')[0].upper()
+                    # Extract section name without the ### prefix
+                    current_section = line.replace('###', '').split(':')[0].strip().upper()
                     current_content = [line.split(':', 1)[1].strip() if ':' in line else '']
+                    logger.debug(f"Found section header: {current_section}")
                 elif current_section and line:
                     current_content.append(line)
 
@@ -765,38 +1400,69 @@ Content:
             if current_section:
                 sections[current_section] = '\n'.join(current_content).strip()
 
-            # Extract structured data
-            analysis = sections.get('ANALYSIS', 'Analysis not provided')
+            logger.debug(f"Parsed sections: {list(sections.keys())}")
+            for section_name, content in sections.items():
+                logger.debug(f"Section '{section_name}': {content[:100]}...")
+
+            # Extract structured data with fallbacks
+            analysis = (sections.get('DETAILED ANALYSIS') or
+                       sections.get('ANALYSIS') or
+                       sections.get('EXECUTIVE SUMMARY') or
+                       'Analysis not provided')
 
             key_insights = []
             if 'KEY INSIGHTS' in sections:
                 insights_text = sections['KEY INSIGHTS']
-                key_insights = [
-                    line.strip('- ').strip()
-                    for line in insights_text.split('\n')
-                    if line.strip().startswith('-')
-                ]
+                logger.debug(f"Processing KEY INSIGHTS section: {insights_text}")
+                # Look for bullet points or numbered items
+                for line in insights_text.split('\n'):
+                    line = line.strip()
+                    if line and (line.startswith('-') or line.startswith('•') or line.startswith('*') or
+                               line.startswith('**') and line.endswith('**:')):
+                        # Extract the insight text
+                        insight = line.lstrip('-•*').strip()
+                        if insight.endswith(':'):
+                            insight = insight[:-1].strip()
+                        if insight:
+                            key_insights.append(insight)
+                            logger.debug(f"Found insight: {insight}")
 
             recommendations = []
             if 'RECOMMENDATIONS' in sections:
                 rec_text = sections['RECOMMENDATIONS']
-                recommendations = [
-                    line.strip('- ').strip()
-                    for line in rec_text.split('\n')
-                    if line.strip().startswith('-')
-                ]
+                logger.debug(f"Processing RECOMMENDATIONS section: {rec_text}")
+                # Look for numbered items or bullet points
+                for line in rec_text.split('\n'):
+                    line = line.strip()
+                    if line and (line.startswith('-') or line.startswith('•') or line.startswith('*') or
+                               line.startswith('1.') or line.startswith('2.') or line.startswith('3.') or
+                               line.startswith('**') and line.endswith('**:')):
+                        # Extract the recommendation text
+                        rec = line.lstrip('-•*123456789.').strip()
+                        if rec.endswith(':'):
+                            rec = rec[:-1].strip()
+                        if rec:
+                            recommendations.append(rec)
+                            logger.debug(f"Found recommendation: {rec}")
+                logger.debug(f"Total recommendations found: {len(recommendations)}")
 
             confidence_text = sections.get('CONFIDENCE', 'medium').lower()
             confidence = 0.8 if 'high' in confidence_text else 0.6 if 'medium' in confidence_text else 0.4
 
             focus_areas = []
-            if 'FOCUS AREAS' in sections:
-                focus_text = sections['FOCUS AREAS']
+            focus_section = (sections.get('FOCUS AREAS FOR IMMEDIATE ATTENTION') or
+                           sections.get('FOCUS AREAS'))
+            if focus_section:
                 focus_areas = [
                     line.strip('- ').strip()
-                    for line in focus_text.split('\n')
-                    if line.strip().startswith('-')
+                    for line in focus_section.split('\n')
+                    if line.strip() and (line.strip().startswith('-') or line.strip().startswith('•'))
                 ]
+
+            # Log parsed results for debugging
+            logger.debug(f"{agent_role.value} parsed: {len(key_insights)} insights, {len(recommendations)} recommendations, confidence: {confidence}")
+            logger.debug(f"Key insights: {key_insights}")
+            logger.debug(f"Recommendations: {recommendations}")
 
             return AgentPerspective(
                 role=agent_role,
@@ -809,6 +1475,7 @@ Content:
 
         except Exception as e:
             logger.error(f"Error parsing {agent_role.value} response: {e}")
+            logger.error(f"Response text: {response_text[:500]}...")
             return self._fallback_agent_perspective(agent_role, "", [])
 
     def _rule_based_agent_analysis(
@@ -1266,24 +1933,37 @@ Content:
         perspectives_summary = self._format_perspectives_for_synthesis(perspectives)
 
         synthesis_prompt = f"""
-You are a senior technical lead synthesizing multiple expert perspectives on a codebase analysis.
+You are a senior technical architect synthesizing multiple expert perspectives on a detailed codebase analysis.
 
 USER QUERY: "{query}"
 
-EXPERT PERSPECTIVES:
+EXPERT PERSPECTIVES FROM SPECIALIZED AGENTS:
 {perspectives_summary}
 
-Your task is to create a comprehensive, flowing response that:
+Your task is to create a comprehensive, detailed technical response that:
 
-1. **EXECUTIVE SUMMARY**: Start with a clear, concise overview (2-3 sentences)
-2. **DETAILED ANALYSIS**: Provide a flowing narrative that weaves together insights from all perspectives
-3. **SYNTHESIS**: Connect the different viewpoints and highlight key themes
-4. **ACTION ITEMS**: Provide concrete, prioritized next steps
-5. **FOLLOW-UP QUESTIONS**: Suggest 2-3 insightful follow-up questions
+1. **EXECUTIVE SUMMARY**: Provide a specific technical overview (3-4 sentences) that mentions actual code components, files, or architectural patterns identified
 
-Make the response feel like a natural conversation with a senior architect who has consulted with multiple experts. Use a flowing, narrative style rather than bullet points where possible.
+2. **DETAILED ANALYSIS**: Create a flowing technical narrative that:
+   - References specific files, functions, classes, and code patterns mentioned by agents
+   - Explains the actual implementation approach and architectural decisions
+   - Discusses concrete technical trade-offs and design choices
+   - Integrates insights from multiple perspectives into a cohesive technical story
+   - Includes specific examples of code patterns, design decisions, or implementation details
 
-Focus on creating connections between different perspectives and providing a holistic view of the system.
+3. **SYNTHESIS**: Connect different technical viewpoints by:
+   - Highlighting how different aspects (architecture, performance, security, etc.) interact
+   - Identifying common themes across multiple expert perspectives
+   - Explaining the technical relationships between different system components
+
+4. **ACTION ITEMS**: Provide specific, implementable technical recommendations:
+   - Include concrete steps with technical details
+   - Reference specific files, functions, or components that need attention
+   - Prioritize based on impact and technical complexity
+
+5. **FOLLOW-UP QUESTIONS**: Suggest 2-3 technical follow-up questions that would provide deeper insights
+
+IMPORTANT: Be highly specific and technical. Reference actual code elements, implementation patterns, and architectural decisions. Avoid generic statements. Focus on the actual codebase being analyzed.
 """
 
         response = self.client.chat.completions.create(

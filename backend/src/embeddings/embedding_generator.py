@@ -299,7 +299,23 @@ class EmbeddingGenerator:
         
         logger.info(f"Generated embeddings for {len(chunks)} chunks using {provider.__class__.__name__}")
         return embeddings_map
-    
+
+    async def generate_embeddings(self, texts: List[str], provider_name: Optional[str] = None) -> List[List[float]]:
+        """Generate embeddings for text queries."""
+        if not texts:
+            return []
+
+        # Select provider
+        provider = self._get_provider(provider_name)
+        if not provider:
+            raise ValueError(f"No available embedding provider")
+
+        # Generate embeddings
+        embeddings = await provider.generate_embeddings(texts)
+
+        logger.info(f"Generated embeddings for {len(texts)} texts using {provider.__class__.__name__}")
+        return embeddings
+
     def _prepare_chunk_text(self, chunk: CodeChunk) -> str:
         """Prepare chunk text for embedding generation."""
         # Combine content with metadata

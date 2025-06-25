@@ -1,10 +1,94 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen, X, Users, Brain, Target, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { apiService } from '../services/apiService';
 import ProjectSelector from './ProjectSelector';
 import { usePersistedProjectSelection } from '../hooks/usePersistedState';
+
+// Streaming message component - removed memo to ensure re-renders
+const StreamingMessage = ({ message, forceUpdate, renderCount }) => {
+  // Enhanced logging to debug rendering
+  console.log('🎨 StreamingMessage render:', message.id, 'Status:', message.content.status, 'Events:', message.content.events?.length || 0, 'LastUpdated:', message.content.lastUpdated, 'ForceUpdate:', forceUpdate, 'RenderCount:', renderCount);
+
+  return (
+    <div className="max-w-5xl bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-50 to-purple-50 px-4 py-3 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <div className="animate-spin">
+              <Loader2 className="w-4 h-4 text-blue-600" />
+            </div>
+            <span className="text-sm font-medium text-gray-700">
+              {message.content.status} {message.content.lastUpdated && `(${new Date(message.content.lastUpdated).toLocaleTimeString()})`}
+            </span>
+
+            <span className="text-xs text-gray-500 ml-2">
+              {message.content.events.length} events • {message.content.lastUpdated ? new Date(message.content.lastUpdated).toLocaleTimeString() : 'No updates'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      {message.content.progress > 0 && (
+        <div className="px-4 py-2 bg-gray-50">
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${message.content.progress}%` }}
+            ></div>
+          </div>
+          <div className="text-xs text-gray-600 mt-1">{message.content.progress}% complete</div>
+        </div>
+      )}
+
+      {/* Events */}
+      {message.content.events && message.content.events.length > 0 && (
+        <div className="px-4 py-3 max-h-60 overflow-y-auto">
+          <div className="text-xs text-gray-600 mb-2">Processing Log:</div>
+          {message.content.events.slice(-10).map((event, index) => (
+            <div key={index} className="text-xs text-gray-600 flex items-start space-x-2 mb-1">
+              <span className="text-gray-400 flex-shrink-0">
+                {event.timestamp ? new Date(event.timestamp * 1000).toLocaleTimeString() : ''}
+              </span>
+              <span className="flex-1 font-mono">
+                {/* Add emoji for different event types */}
+                {event.event_type === 'processing_start' && '🚀 '}
+                {event.event_type === 'query_analysis_start' && '🔍 '}
+                {event.event_type === 'query_analysis_complete' && '✅ '}
+                {event.event_type === 'search_start' && '🔎 '}
+                {event.event_type === 'search_complete' && '✅ '}
+                {event.event_type === 'orchestration_start' && '🎭 '}
+                {event.event_type === 'agent_start' && '🤖 '}
+                {event.event_type === 'agent_progress' && '⚙️ '}
+                {event.event_type === 'agent_complete' && '✅ '}
+                {event.event_type === 'synthesis_start' && '🔄 '}
+                {event.event_type === 'synthesis_progress' && '📈 '}
+                {event.event_type === 'synthesis_complete' && '✅ '}
+                {event.event_type === 'processing_complete' && '🎉 '}
+                {event.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Final Response (if available) */}
+      {message.content.final_response && (
+        <div className="border-t border-gray-200 px-4 py-3">
+          <div className="text-sm text-green-600 font-medium mb-2">
+            ✅ Processing Complete
+          </div>
+          <div className="text-sm text-gray-700">
+            Final response available - converting to final message...
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const ChatInterface = ({ systemStatus }) => {
   const [messages, setMessages] = useState([]);
@@ -20,9 +104,19 @@ const ChatInterface = ({ systemStatus }) => {
   const [expandedResults, setExpandedResults] = useState({});
   const [expandedAgentPerspectives, setExpandedAgentPerspectives] = useState({});
   const [projects, setProjects] = useState([]);
+  const [forceUpdate, setForceUpdate] = useState(0);
+  const [renderCount, setRenderCount] = useState(0);
+  const [lastRequestTime, setLastRequestTime] = useState(0);
+  const [requestQueue, setRequestQueue] = useState([]);
+  const [isProcessingRequest, setIsProcessingRequest] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Track renders (disabled to reduce log noise)
+  // useEffect(() => {
+  //   setRenderCount(prev => prev + 1);
+  // });
 
   useEffect(() => {
     scrollToBottom();
@@ -52,6 +146,33 @@ const ChatInterface = ({ systemStatus }) => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Request throttling to prevent too many concurrent requests
+  const throttleRequest = async (requestFn) => {
+    const now = Date.now();
+    const minInterval = 1000; // Minimum 1 second between requests
+
+    if (isProcessingRequest) {
+      console.log('Request blocked: Another request is already processing');
+      return null;
+    }
+
+    if (now - lastRequestTime < minInterval) {
+      const waitTime = minInterval - (now - lastRequestTime);
+      console.log(`Request throttled: Waiting ${waitTime}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+
+    setIsProcessingRequest(true);
+    setLastRequestTime(Date.now());
+
+    try {
+      const result = await requestFn();
+      return result;
+    } finally {
+      setIsProcessingRequest(false);
+    }
+  };
+
   // Get selected project names for display
   const getSelectedProjectNames = () => {
     const selectedProjects = projects.filter(p => selectedProjectIds.includes(p.id));
@@ -75,7 +196,7 @@ const ChatInterface = ({ systemStatus }) => {
 
   const handleSubmit = async (e, useFlowAnalysis = false) => {
     e.preventDefault();
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || isProcessingRequest) return;
 
     const userMessage = {
       id: Date.now(),
@@ -90,22 +211,36 @@ const ChatInterface = ({ systemStatus }) => {
     setIsLoading(true);
     setIsMultiAgentAnalysis(useFlowAnalysis);
 
-    try {
-      let response;
+    const response = await throttleRequest(async () => {
       if (useFlowAnalysis) {
-        response = await apiService.queryCodebaseFlow(userMessage.content, {
+        return await apiService.queryCodebaseFlow(userMessage.content, {
           model: selectedModel || null,
           limit: resultLimit,
           includeContext: includeContext,
           projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
         });
       } else {
-        response = await apiService.queryCodebase(userMessage.content, {
+        return await apiService.queryCodebase(userMessage.content, {
           model: selectedModel || null,
           limit: resultLimit,
           includeContext: includeContext,
           projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
         });
+      }
+    });
+
+    if (!response) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+
+      // Check if response suggests streaming
+      if (response.use_streaming) {
+        // Handle streaming response
+        await handleStreamingQuery(userMessage.content, useFlowAnalysis);
+        return;
       }
 
       const assistantMessage = {
@@ -128,6 +263,233 @@ const ChatInterface = ({ systemStatus }) => {
       setIsLoading(false);
       setIsMultiAgentAnalysis(false);
       inputRef.current?.focus();
+    }
+  };
+
+  const handleStreamingQuery = async (query, useFlowAnalysis = false) => {
+    // Create a streaming message placeholder
+    const streamingMessageId = Date.now() + 1;
+    const streamingMessage = {
+      id: streamingMessageId,
+      type: 'streaming',
+      content: {
+        status: 'Starting analysis...',
+        progress: 0,
+        events: [],
+        final_response: null
+      },
+      timestamp: new Date()
+    };
+
+    setMessages(prev => {
+      const newMessages = [...prev, streamingMessage];
+      // Reduced logging to prevent spam
+      // console.log('🔥 Added streaming message with ID:', streamingMessageId);
+      // console.log('🔥 Total messages after adding:', newMessages.length);
+      // console.log('🔥 Streaming message content:', streamingMessage.content);
+      return newMessages;
+    });
+
+    // Turn off the hardcoded loading state since we now have a streaming message
+    setIsLoading(false);
+
+    try {
+      // Reduced logging to prevent spam
+      // console.log('Making streaming request to /mcp/query/stream');
+      // console.log('Request payload:', { query, model: selectedModel, limit: resultLimit });
+
+      // Start streaming query
+      console.log('🔥 Making streaming request to /mcp/query/stream');
+      const response = await fetch('/mcp/query/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          model: selectedModel || null,
+          limit: resultLimit,
+          include_context: includeContext,
+          project_ids: selectedProjectIds.length > 0 ? selectedProjectIds : null
+        }),
+        // Add signal for timeout control
+        signal: AbortSignal.timeout(300000) // 5 minute timeout
+      });
+
+      // Reduced logging to prevent spam
+      console.log('Response received:', response.status, response.statusText);
+
+      if (!response.ok) {
+        console.error('Response not OK:', response.status, response.statusText);
+        if (response.status === 429) {
+          throw new Error('Too many requests. Please wait a moment before trying again.');
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      console.log('🔥 Starting to read response stream...');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('🔥 Stream ended');
+          break;
+        }
+
+        // Decode the chunk and add to buffer
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // Process complete lines
+        const lines = buffer.split('\n');
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop() || '';
+
+        console.log('🔥 Processing', lines.length, 'complete lines');
+
+        for (const line of lines) {
+          if (line.trim() === '') continue; // Skip empty lines
+
+          console.log('🔥 Processing line:', line);
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr) continue; // Skip empty data lines
+
+              console.log('🔥 Parsing JSON:', jsonStr);
+              const eventData = JSON.parse(jsonStr);
+
+              // Enhanced debug logging
+              console.log('🔥 Received streaming event:', eventData.event_type, eventData.message);
+              console.log('🔥 Event data:', JSON.stringify(eventData, null, 2));
+
+              // Update the streaming message with new event
+              const currentTime = Date.now();
+
+              setMessages(prev => {
+                const newMessages = prev.map(msg => {
+                  if (msg.id === streamingMessageId) {
+                    const updatedMsg = {
+                      ...msg,
+                      content: {
+                        ...msg.content,
+                        status: eventData.message,
+                        progress: eventData.progress_percentage || msg.content.progress,
+                        events: [...msg.content.events, eventData],
+                        lastUpdated: currentTime
+                      }
+                    };
+                    return updatedMsg;
+                  }
+                  return msg;
+                });
+
+                return newMessages;
+              });
+
+              // Force a re-render by updating a separate state
+              setForceUpdate(prev => prev + 1);
+
+              // Check if processing is complete
+              if (eventData.event_type === 'processing_complete' ||
+                  eventData.event_type === 'StreamEventType.COMPLETE' ||
+                  eventData.event_type === 'StreamEventType.PROCESSING_COMPLETE' ||
+                  eventData.event_type === 'complete' ||
+                  eventData.event_type === 'COMPLETE') {
+
+                const finalResponse = eventData.data?.final_response || eventData.data;
+
+                // Convert to final message
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === streamingMessageId) {
+                    const updatedMsg = {
+                      ...msg,
+                      type: useFlowAnalysis ? 'flow_assistant' : 'assistant',
+                      content: {
+                        ...msg.content,
+                        final_response: finalResponse,
+                        status: 'Complete',
+                        // Ensure arrays are preserved
+                        events: msg.content.events || [],
+                        results: msg.content.results || []
+                      }
+                    };
+                    return updatedMsg;
+                  }
+                  return msg;
+                }));
+              }
+            } catch (e) {
+              console.error('Error parsing streaming event:', e, 'Line:', line);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Streaming error:', error);
+      // Update message to show error
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === streamingMessageId) {
+          return {
+            ...msg,
+            type: 'error',
+            content: `Streaming error: ${error.message}`
+          };
+        }
+        return msg;
+      }));
+    }
+  };
+
+  const testStreaming = async () => {
+    console.log('🧪 Testing streaming functionality...');
+
+    try {
+      const response = await fetch('/mcp/test/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        console.error('❌ Test streaming failed:', response.status, response.statusText);
+        return;
+      }
+
+      console.log('✅ Test streaming response received');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let eventCount = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('🧪 Test streaming completed, received', eventCount, 'events');
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const eventData = JSON.parse(line.slice(6));
+              eventCount++;
+              console.log('🧪 Test event:', eventData.event_type, '-', eventData.message);
+            } catch (e) {
+              console.error('🧪 Test JSON parse error:', e);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('🧪 Test streaming error:', error);
     }
   };
 
@@ -354,7 +716,7 @@ const ChatInterface = ({ systemStatus }) => {
     switch (message.type) {
       case 'user':
         return (
-          <div key={message.id} className="flex justify-end mb-4">
+          <div className="flex justify-end mb-4">
             <div className="max-w-3xl bg-primary-600 text-white rounded-lg px-4 py-2">
               <p className="whitespace-pre-wrap">{message.content}</p>
               <div className="flex items-center justify-between mt-2">
@@ -565,7 +927,7 @@ const ChatInterface = ({ systemStatus }) => {
                   </h3>
                 </div>
                 <div className="p-4 space-y-4">
-                  {message.content.results.slice(0, expandedResults[message.id] ? message.content.results.length : 3).map((result, index) => (
+                  {message.content.results && message.content.results.slice(0, expandedResults[message.id] ? message.content.results.length : 3).map((result, index) => (
                     <div key={index} className="border border-gray-200 rounded-lg overflow-hidden">
                       {/* Result Header */}
                       <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
@@ -615,7 +977,7 @@ const ChatInterface = ({ systemStatus }) => {
                             Related Context ({result.context_chunks.length} items):
                           </div>
                           <div className="flex flex-wrap gap-1">
-                            {result.context_chunks.slice(0, 5).map((contextChunk, contextIndex) => (
+                            {result.context_chunks && result.context_chunks.slice(0, 5).map((contextChunk, contextIndex) => (
                               <span
                                 key={contextIndex}
                                 className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-700"
@@ -872,7 +1234,7 @@ const ChatInterface = ({ systemStatus }) => {
 
       case 'error':
         return (
-          <div key={message.id} className="flex justify-start mb-4">
+          <div className="flex justify-start mb-4">
             <div className="max-w-3xl bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-2">
               <p className="font-medium">Error:</p>
               <p>{message.content}</p>
@@ -883,8 +1245,134 @@ const ChatInterface = ({ systemStatus }) => {
           </div>
         );
 
+      case 'streaming':
+        return (
+          <div className="flex justify-start mb-6">
+            <StreamingMessage
+              message={message}
+              forceUpdate={forceUpdate}
+              renderCount={renderCount}
+            />
+          </div>
+        );
+
       default:
         return null;
+    }
+  };
+
+  const renderFinalResponse = (finalResponse) => {
+    console.log('Rendering final response:', finalResponse);
+
+    // Handle null or undefined response
+    if (!finalResponse) {
+      return (
+        <div className="text-sm text-gray-500">
+          No response data available.
+        </div>
+      );
+    }
+
+    // Check if it's a flow response (from agents) or search results
+    if (finalResponse.executive_summary || finalResponse.agent_perspectives) {
+      // Flow response from agents
+      return (
+        <div className="space-y-4">
+          {finalResponse.executive_summary && (
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">Executive Summary</h4>
+              <p className="text-sm text-gray-700">{finalResponse.executive_summary}</p>
+            </div>
+          )}
+
+          {finalResponse.agent_perspectives && finalResponse.agent_perspectives.length > 0 && (
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">Expert Analysis ({finalResponse.agent_perspectives.length} perspectives)</h4>
+              <div className="space-y-3">
+                {finalResponse.agent_perspectives.map((perspective, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-3">
+                    <div className="flex items-center mb-2">
+                      <span className="text-sm font-medium text-blue-600">
+                        {perspective.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())} Expert
+                      </span>
+                      <span className="ml-2 text-xs text-gray-500">
+                        Confidence: {Math.round(perspective.confidence * 100)}%
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700 mb-2">{perspective.analysis}</p>
+
+                    {perspective.key_insights && perspective.key_insights.length > 0 && (
+                      <div className="mb-2">
+                        <span className="text-xs font-medium text-gray-600">Key Insights:</span>
+                        <ul className="text-xs text-gray-600 ml-2 mt-1">
+                          {perspective.key_insights.map((insight, i) => (
+                            <li key={i} className="mb-1">• {insight}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {perspective.recommendations && perspective.recommendations.length > 0 && (
+                      <div>
+                        <span className="text-xs font-medium text-gray-600">Recommendations:</span>
+                        <ul className="text-xs text-gray-600 ml-2 mt-1">
+                          {perspective.recommendations.map((rec, i) => (
+                            <li key={i} className="mb-1">• {rec}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {finalResponse.synthesis && (
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">Synthesis</h4>
+              <p className="text-sm text-gray-700">{finalResponse.synthesis}</p>
+            </div>
+          )}
+
+          {finalResponse.action_items && finalResponse.action_items.length > 0 && (
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">Action Items</h4>
+              <ul className="text-sm text-gray-700 ml-4">
+                {finalResponse.action_items.map((item, index) => (
+                  <li key={index} className="mb-1">• {item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      );
+    } else if (Array.isArray(finalResponse)) {
+      // Search results
+      return (
+        <div>
+          <h4 className="font-medium text-gray-900 mb-2">Search Results ({finalResponse.length} items)</h4>
+          <div className="space-y-2">
+            {finalResponse && finalResponse.slice(0, 5).map((result, index) => (
+              <div key={index} className="border border-gray-200 rounded p-2">
+                <div className="text-sm font-medium text-gray-900">{result.chunk.name || 'Code Section'}</div>
+                <div className="text-xs text-gray-500">{result.chunk.file_path}</div>
+                <div className="text-xs text-gray-600 mt-1">Score: {(result.score * 100).toFixed(1)}%</div>
+              </div>
+            ))}
+            {finalResponse.length > 5 && (
+              <div className="text-xs text-gray-500">... and {finalResponse.length - 5} more results</div>
+            )}
+          </div>
+        </div>
+      );
+    } else {
+      // Fallback for other response types
+      return (
+        <div className="text-sm text-gray-700">
+          Response ready - {finalResponse.results_count || 'Unknown'} items found
+        </div>
+      );
     }
   };
 
@@ -1073,7 +1561,11 @@ const ChatInterface = ({ systemStatus }) => {
           </div>
         )}
 
-        {messages.map(renderMessage)}
+        {messages.map((message) => (
+          <div key={`${message.id}-${message.content?.lastUpdated || 0}-${forceUpdate}`}>
+            {renderMessage(message)}
+          </div>
+        ))}
 
         {isLoading && (
           <div className="flex justify-start mb-4">
@@ -1142,6 +1634,15 @@ const ChatInterface = ({ systemStatus }) => {
 
           <button
             type="button"
+            onClick={testStreaming}
+            className="p-2 text-orange-400 hover:text-orange-600 hover:bg-orange-100 rounded-lg transition-colors"
+            title="Test Streaming (Debug)"
+          >
+            <span className="text-xs">🧪</span>
+          </button>
+
+          <button
+            type="button"
             onClick={(e) => handleSubmit(e, true)}
             disabled={!inputValue.trim() || isLoading}
             className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-1"
@@ -1153,9 +1654,9 @@ const ChatInterface = ({ systemStatus }) => {
 
           <button
             type="submit"
-            disabled={!inputValue.trim() || isLoading}
+            disabled={!inputValue.trim() || isLoading || isProcessingRequest}
             className="p-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Quick Search"
+            title={isProcessingRequest ? "Request throttled - please wait" : "Quick Search"}
           >
             <Send className="w-5 h-5" />
           </button>
