@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Code, FileText, Search, Settings, ChevronDown, ChevronUp, FolderOpen, X, Users, Brain, Target, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { apiService } from '../services/apiService';
 import ProjectSelector from './ProjectSelector';
 import { usePersistedProjectSelection } from '../hooks/usePersistedState';
+import MarkdownRenderer from './MarkdownRenderer';
 
 // Streaming message component - removed memo to ensure re-renders
 const StreamingMessage = ({ message, forceUpdate, renderCount }) => {
@@ -757,7 +758,9 @@ const ChatInterface = ({ systemStatus }) => {
                       <Search className="w-5 h-5 text-blue-600" />
                       <h3 className="text-lg font-medium text-blue-900">Analysis Summary</h3>
                     </div>
-                    <p className="text-blue-800">{message.content.analysis.summary}</p>
+                    <div className="text-blue-800">
+                      <MarkdownRenderer content={message.content.analysis.summary} />
+                    </div>
                   </div>
 
                   {/* Detailed Explanation */}
@@ -767,7 +770,9 @@ const ChatInterface = ({ systemStatus }) => {
                         <FileText className="w-5 h-5 text-green-600" />
                         <h3 className="text-lg font-medium text-green-900">How It Works</h3>
                       </div>
-                      <p className="text-green-800 whitespace-pre-wrap">{message.content.analysis.detailed_explanation}</p>
+                      <div className="text-green-800">
+                        <MarkdownRenderer content={message.content.analysis.detailed_explanation} />
+                      </div>
                     </div>
                   )}
 
@@ -1050,7 +1055,9 @@ const ChatInterface = ({ systemStatus }) => {
                     <Target className="w-5 h-5 text-blue-600" />
                     <h3 className="text-lg font-medium text-blue-900">Executive Summary</h3>
                   </div>
-                  <p className="text-blue-800 leading-relaxed">{message.content.executive_summary}</p>
+                  <div className="text-blue-800 leading-relaxed">
+                    <MarkdownRenderer content={message.content.executive_summary} />
+                  </div>
                 </div>
               )}
 
@@ -1110,9 +1117,9 @@ const ChatInterface = ({ systemStatus }) => {
                             </div>
 
                             {/* Brief Analysis Preview */}
-                            <p className={`${colors.textSecondary} text-sm mt-2 line-clamp-2`}>
-                              {perspective.analysis}
-                            </p>
+                            <div className={`${colors.textSecondary} text-sm mt-2 line-clamp-2`}>
+                              <MarkdownRenderer content={perspective.analysis} />
+                            </div>
                           </div>
 
                           {/* Expanded Content */}
@@ -1121,7 +1128,9 @@ const ChatInterface = ({ systemStatus }) => {
                               {/* Full Analysis */}
                               <div>
                                 <h5 className={`font-medium ${colors.text} mb-2`}>Detailed Analysis</h5>
-                                <p className={`${colors.textSecondary} leading-relaxed`}>{perspective.analysis}</p>
+                                <div className={`${colors.textSecondary} leading-relaxed`}>
+                                  <MarkdownRenderer content={perspective.analysis} />
+                                </div>
                               </div>
 
                               {/* Key Insights */}
@@ -1169,8 +1178,8 @@ const ChatInterface = ({ systemStatus }) => {
                     <FileText className="w-5 h-5 text-green-600" />
                     <h3 className="text-lg font-medium text-green-900">Comprehensive Analysis</h3>
                   </div>
-                  <div className="text-green-800 leading-relaxed whitespace-pre-wrap">
-                    {message.content.detailed_analysis}
+                  <div className="text-green-800 leading-relaxed">
+                    <MarkdownRenderer content={message.content.detailed_analysis} />
                   </div>
                 </div>
               )}
@@ -1182,7 +1191,9 @@ const ChatInterface = ({ systemStatus }) => {
                     <Brain className="w-5 h-5 text-purple-600" />
                     <h3 className="text-lg font-medium text-purple-900">Synthesis</h3>
                   </div>
-                  <p className="text-purple-800 leading-relaxed">{message.content.synthesis}</p>
+                  <div className="text-purple-800 leading-relaxed">
+                    <MarkdownRenderer content={message.content.synthesis} />
+                  </div>
                 </div>
               )}
 
@@ -1276,7 +1287,9 @@ const ChatInterface = ({ systemStatus }) => {
           {finalResponse.executive_summary && (
             <div>
               <h4 className="font-medium text-gray-900 mb-2">Executive Summary</h4>
-              <p className="text-sm text-gray-700">{finalResponse.executive_summary}</p>
+              <div className="text-sm text-gray-700">
+                <MarkdownRenderer content={finalResponse.executive_summary} />
+              </div>
             </div>
           )}
 
@@ -1294,7 +1307,9 @@ const ChatInterface = ({ systemStatus }) => {
                         Confidence: {Math.round(perspective.confidence * 100)}%
                       </span>
                     </div>
-                    <p className="text-sm text-gray-700 mb-2">{perspective.analysis}</p>
+                    <div className="text-sm text-gray-700 mb-2">
+                      <MarkdownRenderer content={perspective.analysis} />
+                    </div>
 
                     {perspective.key_insights && perspective.key_insights.length > 0 && (
                       <div className="mb-2">
@@ -1326,7 +1341,9 @@ const ChatInterface = ({ systemStatus }) => {
           {finalResponse.synthesis && (
             <div>
               <h4 className="font-medium text-gray-900 mb-2">Synthesis</h4>
-              <p className="text-sm text-gray-700">{finalResponse.synthesis}</p>
+              <div className="text-sm text-gray-700">
+                <MarkdownRenderer content={finalResponse.synthesis} />
+              </div>
             </div>
           )}
 

@@ -901,9 +901,9 @@ Key Classes: {', '.join(classes[:5])}{'...' if len(classes) > 5 else ''}
 As a Senior Software Architect, conduct a comprehensive architectural analysis:
 
 CORE ANALYSIS AREAS:
-- System Architecture: Analyze overall system structure, layering, and component organization
-- Design Patterns: Identify architectural patterns (MVC, microservices, event-driven, etc.)
-- Component Relationships: Map dependencies, interfaces, and communication patterns
+- System Architecture: Analyze overall system structure, layering, component organization and project purpose (solve what problems)
+- Design Patterns: Identify architectural patterns (such as MVC, microservices, event-driven, etc.)
+- Component Relationships: Map dependencies, interfaces, and communication patterns, further offer ASCII Flow diagram to explain the relationships.
 - Scalability Design: Evaluate horizontal/vertical scaling capabilities and bottlenecks
 - Extensibility: Assess how easily new features or components can be added
 - Technology Stack: Analyze technology choices and their architectural implications
@@ -922,7 +922,7 @@ Provide strategic insights on architectural strengths, weaknesses, and evolution
 As a Senior Software Developer, conduct a deep technical implementation analysis:
 
 CODE QUALITY ANALYSIS:
-- Implementation Patterns: Analyze coding patterns, algorithms, and data structures
+- Implementation Patterns: Analyze coding patterns, algorithms, and data structures, further offer ASCII Flow diagram for data flows.
 - Code Organization: Evaluate modularity, separation of concerns, and code structure
 - Best Practices: Assess adherence to SOLID principles, DRY, KISS, and language-specific conventions
 - Error Handling: Analyze exception handling, validation, and edge case management
@@ -942,7 +942,7 @@ As a Security Engineer, conduct a comprehensive security analysis:
 
 SECURITY FUNDAMENTALS:
 - Authentication & Authorization: Analyze user verification and access control mechanisms
-- Input Validation: Evaluate data sanitization, injection prevention, and boundary checks
+- Input Validation: Evaluate data sanitization, injection prevention, and boundary checks, further offer ASCII Flow diagram for authentication flows.
 - Data Protection: Assess encryption, hashing, and sensitive data handling
 - Session Management: Analyze session security, token handling, and state management
 - Access Control: Evaluate permission systems and privilege escalation prevention
@@ -1055,7 +1055,7 @@ Provide insights on data architecture optimization and management best practices
 As a Frontend Architect with UX expertise, conduct a comprehensive UI/UX analysis:
 
 FRONTEND ARCHITECTURE:
-- Component Design: Analyze component architecture, reusability, and composition patterns
+- Component Design: Analyze component architecture, reusability, and composition patterns, further offer ASCII Flow diagram for core components' interactions.
 - State Management: Evaluate state management patterns and data flow architecture
 - Performance: Assess frontend performance, bundle optimization, and loading strategies
 - Accessibility: Analyze WCAG compliance and inclusive design implementation

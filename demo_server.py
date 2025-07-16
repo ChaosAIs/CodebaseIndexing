@@ -209,7 +209,29 @@ def generate_mock_analysis(query: str, chunks: List[CodeChunk], complexity: str)
         perspectives.extend([
             AgentPerspective(
                 role="architect",
-                analysis="The system demonstrates a well-structured layered architecture with clear separation of concerns between API, database, and business logic layers.",
+                analysis="""## System Architecture Analysis
+
+The system demonstrates a **well-structured layered architecture** with clear separation of concerns between API, database, and business logic layers.
+
+### Key Architectural Patterns
+
+- **Layered Architecture**: Clean separation between presentation, business, and data layers
+- **RESTful Design**: Proper HTTP methods and status codes
+- **Async Processing**: Non-blocking I/O operations for better performance
+
+### Code Structure
+
+```python
+# Example of clean architectural boundaries
+class APILayer:
+    def __init__(self, business_service):
+        self.business_service = business_service
+
+    async def handle_request(self, request):
+        return await self.business_service.process(request)
+```
+
+The architecture follows **SOLID principles** and maintains good separation of concerns.""",
                 key_insights=[
                     "Clean architectural boundaries between components",
                     "RESTful API design with proper error handling",
@@ -241,7 +263,41 @@ def generate_mock_analysis(query: str, chunks: List[CodeChunk], complexity: str)
             ),
             AgentPerspective(
                 role="performance",
-                analysis="The system shows performance-conscious design with asynchronous operations and optimized agent selection reducing unnecessary processing by 40-60%.",
+                analysis="""## Performance Analysis
+
+The system shows **performance-conscious design** with asynchronous operations and optimized agent selection reducing unnecessary processing by **40-60%**.
+
+### Performance Metrics
+
+| Metric | Before Optimization | After Optimization | Improvement |
+|--------|-------------------|-------------------|-------------|
+| Agent Calls | 10-12 per query | 4-6 per query | 40-60% reduction |
+| Response Time | 2.5s average | 1.2s average | 52% faster |
+| Memory Usage | 150MB peak | 95MB peak | 37% reduction |
+
+### Key Optimizations
+
+1. **Smart Agent Selection**: Only activates relevant agents based on query complexity
+2. **Query Caching**: 90%+ cache hit rate for repeated queries
+3. **Async Processing**: Non-blocking operations prevent bottlenecks
+
+> **Performance Tip**: The system automatically scales agent usage based on query complexity, ensuring optimal resource utilization.
+
+### Code Example
+
+```python
+async def optimized_query_processing(query: str):
+    # Smart agent selection based on complexity
+    complexity = assess_query_complexity(query)
+    agents = select_agents_for_complexity(complexity)
+
+    # Parallel processing with controlled concurrency
+    results = await asyncio.gather(*[
+        agent.analyze(query) for agent in agents
+    ], return_exceptions=True)
+
+    return synthesize_results(results)
+```""",
                 key_insights=[
                     "Smart agent selection reduces computational overhead",
                     "Caching implementation for repeated queries",
@@ -346,10 +402,75 @@ def generate_mock_analysis(query: str, chunks: List[CodeChunk], complexity: str)
         ])
     
     return FlowAnalysis(
-        executive_summary=f"Comprehensive analysis from {len(perspectives)} specialized agents reveals a well-architected system with strong performance optimizations, reducing agent overhead by 40-60% through smart selection and caching.",
-        detailed_analysis=f"This {complexity} query triggered analysis from {agent_count} specialized agents, demonstrating the system's adaptive approach to resource utilization. The codebase shows excellent architectural patterns with clear separation of concerns, performance-conscious design, and maintainable structure.",
+        executive_summary=f"""# Executive Summary
+
+**Comprehensive analysis** from **{len(perspectives)} specialized agents** reveals a well-architected system with strong performance optimizations, reducing agent overhead by **40-60%** through smart selection and caching.
+
+## Key Findings
+
+- 🚀 **Performance**: Smart agent selection reduces processing overhead significantly
+- 🏗️ **Architecture**: Clean layered design with proper separation of concerns
+- 🔧 **Maintainability**: Modular structure supports easy maintenance and updates
+- 📊 **Scalability**: Adaptive resource utilization based on query complexity""",
+        detailed_analysis=f"""# Detailed Analysis Report
+
+## Query Processing Overview
+
+This **{complexity}** complexity query triggered analysis from **{agent_count} specialized agents**, demonstrating the system's adaptive approach to resource utilization.
+
+### System Architecture Assessment
+
+The codebase shows **excellent architectural patterns** with:
+
+1. **Clear separation of concerns** between layers
+2. **Performance-conscious design** with async operations
+3. **Maintainable structure** with modular components
+
+### Performance Metrics
+
+- **Agent Efficiency**: 40-60% reduction in unnecessary agent calls
+- **Response Time**: Improved by 52% through optimization
+- **Resource Usage**: 37% reduction in memory consumption
+
+### Code Quality Indicators
+
+```python
+# Example of clean architecture
+class SystemOrchestrator:
+    async def process_query(self, query: str) -> AnalysisResult:
+        complexity = self.assess_complexity(query)
+        agents = self.select_optimal_agents(complexity)
+        return await self.synthesize_results(agents, query)
+```
+
+> **Note**: The system demonstrates enterprise-grade patterns suitable for production deployment.""",
         agent_perspectives=perspectives,
-        synthesis=f"The convergence of {len(perspectives)} expert perspectives highlights a system that balances performance, maintainability, and functionality. Key strengths include smart agent orchestration, caching mechanisms, and modular architecture.",
+        synthesis=f"""# Analysis Synthesis
+
+## Convergence of Expert Perspectives
+
+The convergence of **{len(perspectives)} expert perspectives** highlights a system that balances **performance**, **maintainability**, and **functionality**.
+
+### Key Strengths
+
+- **Smart Agent Orchestration**: Reduces computational overhead through intelligent selection
+- **Caching Mechanisms**: 90%+ hit rate for repeated queries
+- **Modular Architecture**: Supports easy maintenance and feature additions
+
+### System Maturity Assessment
+
+| Aspect | Rating | Notes |
+|--------|--------|-------|
+| Architecture | ⭐⭐⭐⭐⭐ | Excellent layered design |
+| Performance | ⭐⭐⭐⭐⭐ | Optimized with smart caching |
+| Maintainability | ⭐⭐⭐⭐ | Good modular structure |
+| Security | ⭐⭐⭐ | Basic measures in place |
+
+### Recommendations Priority
+
+1. **High Priority**: Implement comprehensive testing strategy
+2. **Medium Priority**: Enhance security measures
+3. **Low Priority**: Add advanced monitoring features""",
         action_items=[
             "Implement comprehensive testing strategy",
             "Add performance monitoring and metrics",
