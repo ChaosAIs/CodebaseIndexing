@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections import Counter
 from typing import List, Dict, Optional, Any, Tuple
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -772,9 +773,14 @@ class MCPServer:
                 
                 # Generate embeddings
                 provider_name = request.embedding_model.value if request.embedding_model else None
+                logger.info(f"Starting embedding generation for {len(chunks)} chunks with provider: {provider_name}")
+                logger.debug(f"Chunk types distribution: {dict(Counter(chunk.node_type.value for chunk in chunks))}")
+
                 embeddings = await self.embedding_generator.generate_chunk_embeddings(
                     chunks, provider_name
                 )
+
+                logger.info(f"Embedding generation completed. Generated {len(embeddings)} embeddings")
                 
                 # Get embedding dimension
                 dimension = self.embedding_generator.get_embedding_dimension(provider_name)
@@ -1041,9 +1047,14 @@ class MCPServer:
 
                     # Generate embeddings
                     provider_name = request.embedding_model.value if request.embedding_model else None
+                    logger.info(f"Starting embedding generation for project {project.name}: {len(chunks)} chunks with provider: {provider_name}")
+                    logger.debug(f"Project chunk types distribution: {dict(Counter(chunk.node_type.value for chunk in chunks))}")
+
                     embeddings = await self.embedding_generator.generate_chunk_embeddings(
                         chunks, provider_name
                     )
+
+                    logger.info(f"Project embedding generation completed. Generated {len(embeddings)} embeddings")
 
                     # Get embedding dimension
                     dimension = self.embedding_generator.get_embedding_dimension(provider_name)
@@ -2196,7 +2207,7 @@ Be specific and technical, as if you're a senior architect explaining the system
         """Startup tasks."""
         try:
             # Initialize database connections
-            self.graph_store.initialize_schema()
+            await self.graph_store.initialize_schema()
             logger.info("MCP Server started successfully")
         except Exception as e:
             logger.error(f"Error during startup: {e}")

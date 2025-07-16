@@ -2,6 +2,7 @@
 
 import asyncio
 import click
+from collections import Counter
 from pathlib import Path
 from loguru import logger
 
@@ -63,7 +64,11 @@ async def index_codebase(path: str, model: str, force: bool, languages: list):
         
         # Generate embeddings
         logger.info(f"Generating embeddings using {model} model...")
+        logger.debug(f"Chunk types distribution: {dict(Counter(chunk.node_type.value for chunk in chunks))}")
+
         embeddings = await embedding_generator.generate_chunk_embeddings(chunks, model)
+
+        logger.info(f"Embedding generation completed for standalone indexer")
         
         if not embeddings:
             logger.error("Failed to generate embeddings")

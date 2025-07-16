@@ -29,20 +29,35 @@ class DatabaseConfig(BaseSettings):
 
 class AIModelConfig(BaseSettings):
     """AI model configuration settings."""
-    
+
     # Cloud AI models
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
     huggingface_api_key: Optional[str] = Field(default=None, env="HUGGINGFACE_API_KEY")
     xai_api_key: Optional[str] = Field(default=None, env="XAI_API_KEY")
-    
-    # Local AI models (Ollama)
+
+    # Local AI models (Ollama) - General settings
     ollama_host: str = Field(default="http://localhost:11434", env="OLLAMA_HOST")
     ollama_model: str = Field(default="codegemma", env="OLLAMA_MODEL")
-    
+
+    # Ollama Embedding-specific settings (fallback to general settings if not specified)
+    ollama_embedding_host: Optional[str] = Field(default=None, env="OLLAMA_EMBEDDING_HOST")
+    ollama_embedding_model: Optional[str] = Field(default=None, env="OLLAMA_EMBEDDING_MODEL")
+    ollama_embedding_api_key: Optional[str] = Field(default=None, env="OLLAMA_EMBEDDING_API_KEY")
+
     # Default model configuration
     default_embedding_model: str = Field(default="local", env="DEFAULT_EMBEDDING_MODEL")
     default_cloud_model: str = Field(default="openai", env="DEFAULT_CLOUD_MODEL")
     default_local_model: str = Field(default="codegemma", env="DEFAULT_LOCAL_MODEL")
+
+    @property
+    def effective_ollama_embedding_host(self) -> str:
+        """Get the effective Ollama embedding host (embedding-specific or fallback to general)."""
+        return self.ollama_embedding_host or self.ollama_host
+
+    @property
+    def effective_ollama_embedding_model(self) -> str:
+        """Get the effective Ollama embedding model (embedding-specific or fallback to general)."""
+        return self.ollama_embedding_model or self.ollama_model
 
 
 class ServerConfig(BaseSettings):

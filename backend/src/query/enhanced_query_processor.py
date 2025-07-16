@@ -260,8 +260,10 @@ class EnhancedQueryProcessor:
 
         try:
             # Generate query embedding
+            logger.debug(f"Enhanced query processor: Generating embedding for query: {query[:100]}...")
             query_embedding = await self.embedding_generator.generate_embeddings([query])
             query_embedding = query_embedding[0]
+            logger.debug(f"Enhanced query processor: Generated query embedding with dimension {len(query_embedding)}")
 
             # Search for similar chunks using cosine similarity
             similar_chunks = await self.vector_store.search_similar(

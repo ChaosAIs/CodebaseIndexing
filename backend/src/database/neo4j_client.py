@@ -19,173 +19,296 @@ class Neo4jGraphStore:
     
     def _connect(self):
         """Connect to Neo4j database."""
+        logger.debug(f"🔌 Attempting to connect to Neo4j at: {config.database.neo4j_uri}")
+        logger.debug(f"🔌 Using Neo4j user: {config.database.neo4j_user}")
+
         try:
             self.driver = GraphDatabase.driver(
                 config.database.neo4j_uri,
                 auth=(config.database.neo4j_user, config.database.neo4j_password)
             )
+            logger.debug("🔌 Neo4j driver created successfully")
+
             # Test connection
             with self.driver.session() as session:
-                session.run("RETURN 1")
-            logger.info("Connected to Neo4j database")
+                result = session.run("RETURN 1")
+                test_value = result.single()[0]
+                logger.debug(f"🔌 Connection test successful, returned: {test_value}")
+
+            logger.info("✅ Connected to Neo4j database successfully")
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
+            logger.error(f"❌ Failed to connect to Neo4j: {e}")
+            logger.debug(f"❌ Connection error details: {type(e).__name__}: {str(e)}")
             raise
     
     def close(self):
         """Close Neo4j connection."""
+        logger.debug("🔌 Closing Neo4j connection")
         if self.driver:
-            self.driver.close()
+            try:
+                self.driver.close()
+                logger.debug("✅ Neo4j connection closed successfully")
+            except Exception as e:
+                logger.error(f"❌ Error closing Neo4j connection: {e}")
+                logger.debug(f"❌ Close error details: {type(e).__name__}: {str(e)}")
+        else:
+            logger.debug("🔌 No Neo4j driver to close")
     
-    def initialize_schema(self):
+    async def initialize_schema(self):
         """Initialize Neo4j schema with constraints and indexes."""
+        logger.debug("🏗️ Starting Neo4j schema initialization")
+
         try:
             with self.driver.session() as session:
+                logger.debug("🏗️ Neo4j session created for schema initialization")
+
                 # Create constraints
                 constraints = [
-                    "CREATE CONSTRAINT chunk_id_unique IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
-                    "CREATE CONSTRAINT file_path_index IF NOT EXISTS FOR (c:Chunk) REQUIRE c.file_path IS NOT NULL"
+                    "CREATE CONSTRAINT chunk_id_unique IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE"
+                    # Removed file_path NOT NULL constraint - requires Neo4j Enterprise Edition
                 ]
-                
-                for constraint in constraints:
+
+                logger.debug(f"🏗️ Creating {len(constraints)} constraints")
+                for i, constraint in enumerate(constraints, 1):
                     try:
-                        session.run(constraint)
+                        logger.debug(f"🏗️ Creating constraint {i}/{len(constraints)}: {constraint}")
+                        result = session.run(constraint)
+                        logger.debug(f"✅ Constraint {i} created successfully")
                     except Exception as e:
-                        logger.warning(f"Constraint creation warning: {e}")
-                
+                        logger.warning(f"⚠️ Constraint {i} creation warning: {e}")
+                        logger.debug(f"⚠️ Constraint details - Type: {type(e).__name__}, Query: {constraint}")
+
                 # Create indexes
                 indexes = [
                     "CREATE INDEX chunk_name_index IF NOT EXISTS FOR (c:Chunk) ON (c.name)",
                     "CREATE INDEX chunk_type_index IF NOT EXISTS FOR (c:Chunk) ON (c.node_type)",
                     "CREATE INDEX chunk_file_index IF NOT EXISTS FOR (c:Chunk) ON (c.file_path)"
                 ]
-                
-                for index in indexes:
+
+                logger.debug(f"🏗️ Creating {len(indexes)} indexes")
+                for i, index in enumerate(indexes, 1):
                     try:
-                        session.run(index)
+                        logger.debug(f"🏗️ Creating index {i}/{len(indexes)}: {index}")
+                        result = session.run(index)
+                        logger.debug(f"✅ Index {i} created successfully")
                     except Exception as e:
-                        logger.warning(f"Index creation warning: {e}")
-                
-                logger.info("Neo4j schema initialized")
-                
+                        logger.warning(f"⚠️ Index {i} creation warning: {e}")
+                        logger.debug(f"⚠️ Index details - Type: {type(e).__name__}, Query: {index}")
+
+                logger.info("✅ Neo4j schema initialized successfully")
+                logger.debug("🏗️ Schema initialization completed")
+
         except Exception as e:
-            logger.error(f"Error initializing Neo4j schema: {e}")
+            logger.error(f"❌ Error initializing Neo4j schema: {e}")
+            logger.debug(f"❌ Schema initialization error details: {type(e).__name__}: {str(e)}")
             raise
     
     async def store_chunks(self, chunks: List[CodeChunk]) -> bool:
         """Store chunks as nodes in Neo4j."""
+        logger.debug(f"💾 Starting to store {len(chunks)} chunks in Neo4j")
+
+        if not chunks:
+            logger.debug("💾 No chunks to store, returning True")
+            return True
+
         try:
             with self.driver.session() as session:
+                logger.debug("💾 Neo4j session created for storing chunks")
+
                 # Clear existing data for files being updated
                 file_paths = list(set(chunk.file_path for chunk in chunks))
+                logger.debug(f"💾 Clearing existing data for {len(file_paths)} files: {file_paths}")
+
+                deleted_files_count = 0
                 for file_path in file_paths:
-                    session.run(
+                    logger.debug(f"💾 Deleting existing chunks for file: {file_path}")
+                    result = session.run(
                         "MATCH (c:Chunk {file_path: $file_path}) DETACH DELETE c",
                         file_path=file_path
                     )
+                    deleted_files_count += 1
+                    logger.debug(f"💾 Deleted chunks for file {deleted_files_count}/{len(file_paths)}: {file_path}")
 
                 # Also clear any chunks with the same IDs to avoid constraint violations
                 chunk_ids = [chunk.id for chunk in chunks]
+                logger.debug(f"💾 Clearing existing chunks by ID to avoid constraint violations: {len(chunk_ids)} IDs")
+
+                deleted_ids_count = 0
                 for chunk_id in chunk_ids:
-                    session.run(
+                    logger.debug(f"💾 Deleting existing chunk with ID: {chunk_id}")
+                    result = session.run(
                         "MATCH (c:Chunk {id: $chunk_id}) DETACH DELETE c",
                         chunk_id=chunk_id
                     )
-                
+                    deleted_ids_count += 1
+                    if deleted_ids_count % 100 == 0:  # Log every 100 deletions
+                        logger.debug(f"💾 Deleted {deleted_ids_count}/{len(chunk_ids)} chunks by ID")
+
                 # Create or update nodes using MERGE
-                for chunk in chunks:
-                    session.run("""
-                        MERGE (c:Chunk {id: $id})
-                        SET c.content = $content,
-                            c.file_path = $file_path,
-                            c.start_line = $start_line,
-                            c.end_line = $end_line,
-                            c.node_type = $node_type,
-                            c.name = $name,
-                            c.parent_id = $parent_id,
-                            c.project_id = $project_id,
-                            c.calls = $calls,
-                            c.called_by = $called_by,
-                            c.imports = $imports,
-                            c.metadata = $metadata
-                    """, {
-                        "id": chunk.id,
-                        "content": chunk.content,
-                        "file_path": chunk.file_path,
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "node_type": chunk.node_type.value,
-                        "name": chunk.name,
-                        "parent_id": chunk.parent_id,
-                        "project_id": chunk.project_id,
-                        "calls": chunk.calls,
-                        "called_by": chunk.called_by,
-                        "imports": chunk.imports,
-                        "metadata": json.dumps(chunk.metadata) if chunk.metadata else "{}"
-                    })
-                
-                logger.info(f"Stored {len(chunks)} chunks as nodes in Neo4j")
+                logger.debug(f"💾 Creating/updating {len(chunks)} chunk nodes")
+                created_count = 0
+
+                for i, chunk in enumerate(chunks, 1):
+                    try:
+                        logger.debug(f"💾 Creating chunk {i}/{len(chunks)}: {chunk.id} ({chunk.name}) in {chunk.file_path}")
+
+                        result = session.run("""
+                            MERGE (c:Chunk {id: $id})
+                            SET c.content = $content,
+                                c.file_path = $file_path,
+                                c.start_line = $start_line,
+                                c.end_line = $end_line,
+                                c.node_type = $node_type,
+                                c.name = $name,
+                                c.parent_id = $parent_id,
+                                c.project_id = $project_id,
+                                c.calls = $calls,
+                                c.called_by = $called_by,
+                                c.imports = $imports,
+                                c.metadata = $metadata
+                        """, {
+                            "id": chunk.id,
+                            "content": chunk.content,
+                            "file_path": chunk.file_path,
+                            "start_line": chunk.start_line,
+                            "end_line": chunk.end_line,
+                            "node_type": chunk.node_type.value,
+                            "name": chunk.name,
+                            "parent_id": chunk.parent_id,
+                            "project_id": chunk.project_id,
+                            "calls": chunk.calls,
+                            "called_by": chunk.called_by,
+                            "imports": chunk.imports,
+                            "metadata": json.dumps(chunk.metadata) if chunk.metadata else "{}"
+                        })
+
+                        created_count += 1
+                        if created_count % 50 == 0:  # Log every 50 creations
+                            logger.debug(f"💾 Created {created_count}/{len(chunks)} chunks")
+
+                    except Exception as chunk_error:
+                        logger.error(f"❌ Error creating chunk {chunk.id}: {chunk_error}")
+                        logger.debug(f"❌ Chunk details - File: {chunk.file_path}, Name: {chunk.name}, Type: {chunk.node_type}")
+                        raise
+
+                logger.info(f"✅ Successfully stored {len(chunks)} chunks as nodes in Neo4j")
+                logger.debug(f"💾 Chunk storage completed: {created_count} chunks created/updated")
                 return True
-                
+
         except Exception as e:
-            logger.error(f"Error storing chunks in Neo4j: {e}")
+            logger.error(f"❌ Error storing chunks in Neo4j: {e}")
+            logger.debug(f"❌ Store chunks error details: {type(e).__name__}: {str(e)}")
             return False
     
     async def create_relationships(self, chunks: List[CodeChunk]) -> bool:
         """Create relationships between chunks."""
+        logger.debug(f"🔗 Starting to create relationships for {len(chunks)} chunks")
+
+        if not chunks:
+            logger.debug("🔗 No chunks provided, returning True")
+            return True
+
         try:
             with self.driver.session() as session:
+                logger.debug("🔗 Neo4j session created for relationship creation")
+
+                # Count relationships to create
+                parent_child_count = sum(1 for chunk in chunks if chunk.parent_id)
+                call_count = sum(len(chunk.calls) for chunk in chunks)
+                import_count = sum(len(chunk.imports) for chunk in chunks)
+
+                logger.debug(f"🔗 Relationships to create: {parent_child_count} parent-child, {call_count} calls, {import_count} imports")
+
                 # Create parent-child relationships
+                logger.debug("🔗 Creating parent-child relationships")
+                created_parent_child = 0
+
                 for chunk in chunks:
                     if chunk.parent_id:
-                        session.run("""
-                            MATCH (parent:Chunk {id: $parent_id})
-                            MATCH (child:Chunk {id: $child_id})
-                            CREATE (parent)-[:PARENT_OF {weight: 1.0}]->(child)
-                            CREATE (child)-[:CHILD_OF {weight: 1.0}]->(parent)
-                        """, {
-                            "parent_id": chunk.parent_id,
-                            "child_id": chunk.id
-                        })
-                
+                        try:
+                            logger.debug(f"🔗 Creating parent-child: {chunk.parent_id} -> {chunk.id}")
+                            result = session.run("""
+                                MATCH (parent:Chunk {id: $parent_id})
+                                MATCH (child:Chunk {id: $child_id})
+                                CREATE (parent)-[:PARENT_OF {weight: 1.0}]->(child)
+                                CREATE (child)-[:CHILD_OF {weight: 1.0}]->(parent)
+                            """, {
+                                "parent_id": chunk.parent_id,
+                                "child_id": chunk.id
+                            })
+                            created_parent_child += 1
+                        except Exception as rel_error:
+                            logger.warning(f"⚠️ Failed to create parent-child relationship {chunk.parent_id} -> {chunk.id}: {rel_error}")
+
+                logger.debug(f"🔗 Created {created_parent_child}/{parent_child_count} parent-child relationships")
+
                 # Create call relationships
+                logger.debug("🔗 Creating call relationships")
+                created_calls = 0
+
                 for chunk in chunks:
                     for called_id in chunk.calls:
-                        session.run("""
-                            MATCH (caller:Chunk {id: $caller_id})
-                            MATCH (callee:Chunk {id: $callee_id})
-                            CREATE (caller)-[:CALLS {weight: 0.5}]->(callee)
-                            CREATE (callee)-[:CALLED_BY {weight: 0.5}]->(caller)
-                        """, {
-                            "caller_id": chunk.id,
-                            "callee_id": called_id
-                        })
+                        try:
+                            logger.debug(f"🔗 Creating call relationship: {chunk.id} -> {called_id}")
+                            result = session.run("""
+                                MATCH (caller:Chunk {id: $caller_id})
+                                MATCH (callee:Chunk {id: $callee_id})
+                                CREATE (caller)-[:CALLS {weight: 0.5}]->(callee)
+                                CREATE (callee)-[:CALLED_BY {weight: 0.5}]->(caller)
+                            """, {
+                                "caller_id": chunk.id,
+                                "callee_id": called_id
+                            })
+                            created_calls += 1
+                        except Exception as call_error:
+                            logger.warning(f"⚠️ Failed to create call relationship {chunk.id} -> {called_id}: {call_error}")
+
+                logger.debug(f"🔗 Created {created_calls}/{call_count} call relationships")
 
                 # Create import relationships
+                logger.debug("🔗 Creating import relationships")
+                created_imports = 0
+
                 for chunk in chunks:
                     for imported_id in chunk.imports:
-                        session.run("""
-                            MATCH (importer:Chunk {id: $importer_id})
-                            MATCH (imported:Chunk {id: $imported_id})
-                            CREATE (importer)-[:IMPORTS {weight: 0.3}]->(imported)
-                            CREATE (imported)-[:IMPORTED_BY {weight: 0.3}]->(importer)
-                        """, {
-                            "importer_id": chunk.id,
-                            "imported_id": imported_id
-                        })
+                        try:
+                            logger.debug(f"🔗 Creating import relationship: {chunk.id} -> {imported_id}")
+                            result = session.run("""
+                                MATCH (importer:Chunk {id: $importer_id})
+                                MATCH (imported:Chunk {id: $imported_id})
+                                CREATE (importer)-[:IMPORTS {weight: 0.3}]->(imported)
+                                CREATE (imported)-[:IMPORTED_BY {weight: 0.3}]->(importer)
+                            """, {
+                                "importer_id": chunk.id,
+                                "imported_id": imported_id
+                            })
+                            created_imports += 1
+                        except Exception as import_error:
+                            logger.warning(f"⚠️ Failed to create import relationship {chunk.id} -> {imported_id}: {import_error}")
 
-                logger.info("Created relationships in Neo4j")
+                logger.debug(f"🔗 Created {created_imports}/{import_count} import relationships")
+
+                total_created = created_parent_child + created_calls + created_imports
+                total_expected = parent_child_count + call_count + import_count
+
+                logger.info(f"✅ Created {total_created}/{total_expected} relationships in Neo4j")
+                logger.debug(f"🔗 Relationship creation completed: {created_parent_child} parent-child, {created_calls} calls, {created_imports} imports")
                 return True
-                
+
         except Exception as e:
-            logger.error(f"Error creating relationships in Neo4j: {e}")
+            logger.error(f"❌ Error creating relationships in Neo4j: {e}")
+            logger.debug(f"❌ Relationship creation error details: {type(e).__name__}: {str(e)}")
             return False
     
     async def get_chunk_context(self, chunk_id: str, max_depth: int = 2) -> Dict[str, List[CodeChunk]]:
         """Get contextual chunks using graph traversal."""
+        logger.debug(f"🔍 Getting context for chunk: {chunk_id} (max_depth: {max_depth})")
+
         try:
             with self.driver.session() as session:
-                context = {
+                logger.debug("🔍 Neo4j session created for context retrieval")
+
+                context: Dict[str, List[CodeChunk]] = {
                     'parents': [],
                     'children': [],
                     'calls': [],
@@ -197,15 +320,22 @@ class Neo4jGraphStore:
                 }
 
                 # Get hierarchical parents (up to root)
+                logger.debug("🔍 Querying for parent chunks")
                 result = session.run("""
                     MATCH path = (c:Chunk {id: $chunk_id})-[:CHILD_OF*1..5]->(parent:Chunk)
                     RETURN parent, length(path) as depth
                     ORDER BY depth ASC
                 """, chunk_id=chunk_id)
 
+                parent_count = 0
                 for record in result:
                     parent_data = record["parent"]
-                    context['parents'].append(self._record_to_chunk(parent_data))
+                    parent_chunk = self._record_to_chunk(parent_data)
+                    context['parents'].append(parent_chunk)
+                    parent_count += 1
+                    logger.debug(f"🔍 Found parent: {parent_chunk.id} ({parent_chunk.name})")
+
+                logger.debug(f"🔍 Found {parent_count} parent chunks")
 
                 # Get all children (deeper exploration)
                 result = session.run("""
@@ -490,23 +620,32 @@ class Neo4jGraphStore:
     
     async def get_graph_data(self, file_path: Optional[str] = None, project_ids: Optional[List[str]] = None, limit: int = 1000) -> GraphData:
         """Get graph data for visualization."""
+        logger.debug(f"📊 Getting graph data - file_path: {file_path}, project_ids: {project_ids}, limit: {limit}")
+
         try:
             with self.driver.session() as session:
+                logger.debug("📊 Neo4j session created for graph data retrieval")
+
                 # Build query based on filters
                 where_conditions = []
-                params = {"limit": limit}
+                params: Dict[str, Any] = {"limit": limit}
 
                 if file_path:
                     where_conditions.append("c.file_path = $file_path")
                     params["file_path"] = file_path
+                    logger.debug(f"📊 Added file_path filter: {file_path}")
 
                 if project_ids:
                     where_conditions.append("c.project_id IN $project_ids")
                     params["project_ids"] = project_ids
+                    logger.debug(f"📊 Added project_ids filter: {project_ids}")
 
                 where_clause = " AND ".join(where_conditions)
                 if where_clause:
                     where_clause = "WHERE " + where_clause
+
+                logger.debug(f"📊 Built where clause: {where_clause}")
+                logger.debug(f"📊 Query parameters: {params}")
 
                 node_query = f"""
                     MATCH (c:Chunk)
@@ -521,10 +660,15 @@ class Neo4jGraphStore:
                     RETURN c1.id as source, c2.id as target, type(r) as rel_type, r.weight as weight
                     LIMIT $limit
                 """
-                
+
                 # Get nodes
+                logger.debug("📊 Executing node query")
+                logger.debug(f"📊 Node query: {node_query}")
+
                 nodes = []
                 result = session.run(node_query, params)
+                node_count = 0
+
                 for record in result:
                     chunk_data = record["c"]
                     node = GraphNode(
@@ -539,10 +683,18 @@ class Neo4jGraphStore:
                         }
                     )
                     nodes.append(node)
-                
+                    node_count += 1
+
+                logger.debug(f"📊 Retrieved {node_count} nodes")
+
                 # Get edges
+                logger.debug("📊 Executing edge query")
+                logger.debug(f"📊 Edge query: {edge_query}")
+
                 edges = []
                 result = session.run(edge_query, params)
+                edge_count = 0
+
                 for record in result:
                     edge = GraphEdge(
                         source=record["source"],
@@ -551,8 +703,11 @@ class Neo4jGraphStore:
                         weight=record.get("weight", 1.0)
                     )
                     edges.append(edge)
-                
-                return GraphData(
+                    edge_count += 1
+
+                logger.debug(f"📊 Retrieved {edge_count} edges")
+
+                graph_data = GraphData(
                     nodes=nodes,
                     edges=edges,
                     metadata={
@@ -561,9 +716,14 @@ class Neo4jGraphStore:
                         "file_path": file_path
                     }
                 )
-                
+
+                logger.info(f"✅ Graph data retrieved: {len(nodes)} nodes, {len(edges)} edges")
+                logger.debug(f"📊 Graph data metadata: {graph_data.metadata}")
+                return graph_data
+
         except Exception as e:
-            logger.error(f"Error getting graph data: {e}")
+            logger.error(f"❌ Error getting graph data: {e}")
+            logger.debug(f"❌ Graph data error details: {type(e).__name__}: {str(e)}")
             return GraphData(nodes=[], edges=[])
 
     def find_related_entities(self, entity_names: List[str], max_depth: int = 2, limit: int = 50) -> List[Dict[str, Any]]:
@@ -782,35 +942,62 @@ class Neo4jGraphStore:
     
     async def health_check(self) -> bool:
         """Check if Neo4j is healthy."""
+        logger.debug("🏥 Performing Neo4j health check")
+
         try:
             with self.driver.session() as session:
+                logger.debug("🏥 Executing health check query")
                 result = session.run("RETURN 1 as test")
-                return result.single()["test"] == 1
+                test_result = result.single()
+
+                if test_result and test_result["test"] == 1:
+                    logger.debug("✅ Neo4j health check passed")
+                    return True
+                else:
+                    logger.warning("⚠️ Neo4j health check returned unexpected result")
+                    return False
+
         except Exception as e:
-            logger.error(f"Neo4j health check failed: {e}")
+            logger.error(f"❌ Neo4j health check failed: {e}")
+            logger.debug(f"❌ Health check error details: {type(e).__name__}: {str(e)}")
             return False
     
     async def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics."""
+        logger.debug("📊 Getting Neo4j database statistics")
+
         try:
             with self.driver.session() as session:
+                logger.debug("📊 Neo4j session created for statistics")
+
                 # Get node count
+                logger.debug("📊 Querying for node count")
                 result = session.run("MATCH (c:Chunk) RETURN count(c) as node_count")
                 node_count = result.single()["node_count"]
-                
+                logger.debug(f"📊 Found {node_count} nodes")
+
                 # Get relationship count
+                logger.debug("📊 Querying for relationship count")
                 result = session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
                 rel_count = result.single()["rel_count"]
-                
+                logger.debug(f"📊 Found {rel_count} relationships")
+
                 # Get file count
+                logger.debug("📊 Querying for file count")
                 result = session.run("MATCH (c:Chunk) RETURN count(DISTINCT c.file_path) as file_count")
                 file_count = result.single()["file_count"]
-                
-                return {
+                logger.debug(f"📊 Found {file_count} files")
+
+                stats = {
                     "total_chunks": node_count,
                     "total_relationships": rel_count,
                     "total_files": file_count
                 }
+
+                logger.info(f"✅ Neo4j statistics: {stats}")
+                return stats
+
         except Exception as e:
-            logger.error(f"Error getting Neo4j statistics: {e}")
+            logger.error(f"❌ Error getting Neo4j statistics: {e}")
+            logger.debug(f"❌ Statistics error details: {type(e).__name__}: {str(e)}")
             return {}

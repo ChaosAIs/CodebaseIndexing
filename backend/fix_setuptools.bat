@@ -1,0 +1,13 @@
+@echo off
+echo Fixing setuptools issue...
+
+echo Upgrading pip...
+python -m pip install --upgrade pip
+
+echo Installing/upgrading setuptools and wheel...
+python -m pip install --upgrade setuptools wheel
+
+echo Verifying installation...
+python -c "import setuptools; print('setuptools version:', setuptools.__version__)"
+
+echo Done! Try installing requirements again.
