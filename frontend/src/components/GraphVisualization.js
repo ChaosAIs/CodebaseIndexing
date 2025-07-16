@@ -43,7 +43,7 @@ const GraphVisualization = ({ systemStatus }) => {
     if (graphData && containerRef.current) {
       initializeCytoscape();
     }
-    
+
     return () => {
       if (cyRef.current) {
         cyRef.current.destroy();
@@ -51,6 +51,39 @@ const GraphVisualization = ({ systemStatus }) => {
       }
     };
   }, [graphData, layout]);
+
+  // Handle window resize
+  // useEffect(() => {
+  //   const handleResize = () => {
+  //     if (cyRef.current) {
+  //       cyRef.current.resize();
+  //       cyRef.current.fit();
+  //     }
+  //   };
+
+  //   window.addEventListener('resize', handleResize);
+  //   return () => window.removeEventListener('resize', handleResize);
+  // }, []);
+
+  // Handle container resize when panels are toggled
+  // useEffect(() => {
+  //   const resizeObserver = new ResizeObserver(() => {
+  //     if (cyRef.current) {
+  //       setTimeout(() => {
+  //         cyRef.current.resize();
+  //         cyRef.current.fit();
+  //       }, 100);
+  //     }
+  //   });
+
+  //   if (containerRef.current) {
+  //     resizeObserver.observe(containerRef.current);
+  //   }
+
+  //   return () => {
+  //     resizeObserver.disconnect();
+  //   };
+  // }, [selectedNode, showSettings]);
 
   const loadGraphData = async () => {
     setLoading(true);
@@ -314,11 +347,11 @@ const GraphVisualization = ({ systemStatus }) => {
   }
 
   return (
-    <div className="flex h-full bg-gray-50">
+    <div className="flex h-screen bg-gray-50">
       {/* Main Graph Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-h-0">
         {/* Toolbar */}
-        <div className="bg-white border-b border-gray-200 p-4">
+        <div className="bg-white border-b border-gray-200 p-4 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <h2 className="text-lg font-medium text-gray-900 flex items-center">
@@ -373,7 +406,7 @@ const GraphVisualization = ({ systemStatus }) => {
           
           {/* Settings Panel */}
           {showSettings && (
-            <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="mt-4 pt-4 border-t border-gray-200 max-h-96 overflow-y-auto">
               <div className="space-y-4">
                 {/* Project Selection */}
                 <div>
@@ -393,7 +426,7 @@ const GraphVisualization = ({ systemStatus }) => {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Layout
@@ -455,10 +488,10 @@ const GraphVisualization = ({ systemStatus }) => {
         </div>
         
         {/* Graph Container */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative min-h-0">
           <div
             ref={containerRef}
-            className="w-full h-full graph-container"
+            className="absolute inset-0 w-full h-full graph-container"
             style={{ background: '#fafafa' }}
           />
         </div>
@@ -466,9 +499,21 @@ const GraphVisualization = ({ systemStatus }) => {
       
       {/* Node Details Panel */}
       {selectedNode && (
-        <div className="w-80 bg-white border-l border-gray-200 p-4 overflow-y-auto">
-          <div className="mb-4">
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Node Details</h3>
+        <div className="w-80 min-w-80 max-w-96 bg-white border-l border-gray-200 flex flex-col">
+          <div className="p-4 border-b border-gray-200 flex-shrink-0">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-medium text-gray-900">Node Details</h3>
+              <button
+                onClick={() => setSelectedNode(null)}
+                className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
             
             <div className="space-y-3">
               <div>
@@ -500,8 +545,8 @@ const GraphVisualization = ({ systemStatus }) => {
               {selectedNode.contentPreview && (
                 <div>
                   <label className="text-sm font-medium text-gray-700">Preview:</label>
-                  <div className="mt-1 p-2 bg-gray-50 rounded text-xs font-mono text-gray-700 max-h-32 overflow-y-auto">
-                    {selectedNode.contentPreview}
+                  <div className="mt-1 p-3 bg-gray-50 rounded text-xs font-mono text-gray-700 max-h-48 overflow-y-auto border">
+                    <pre className="whitespace-pre-wrap break-words">{selectedNode.contentPreview}</pre>
                   </div>
                 </div>
               )}
