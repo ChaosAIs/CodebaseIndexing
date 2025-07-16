@@ -188,8 +188,8 @@ class MCPServer:
                         request.query, intent, entities
                     )
 
-                    # Generate query embedding
-                    query_embedding = await self._generate_query_embedding(enhanced_query, request.model)
+                    # Generate query embedding (ignore UI model selection, use .env config)
+                    query_embedding = await self._generate_query_embedding(enhanced_query, None)
 
                     # Convert search filters to Qdrant format
                     qdrant_filters = self._convert_search_filters_to_qdrant(search_filters)
@@ -312,7 +312,7 @@ class MCPServer:
                     query=request.query,
                     results=results,
                     total_results=len(results),
-                    model_used=request.model or config.ai_models.default_embedding_model,
+                    model_used=self._get_actual_embedding_model_used(),
                     processing_time=processing_time,
                     analysis=analysis
                 )
@@ -471,8 +471,8 @@ class MCPServer:
                         search_term, intent, expanded_entities
                     )
 
-                    # Generate query embedding
-                    query_embedding = await self._generate_query_embedding(enhanced_query, request.model)
+                    # Generate query embedding (ignore UI model selection, use .env config)
+                    query_embedding = await self._generate_query_embedding(enhanced_query, None)
 
                     # Convert search filters to Qdrant format
                     qdrant_filters = self._convert_search_filters_to_qdrant(search_filters)
@@ -623,8 +623,8 @@ class MCPServer:
                 # Step 3: Perform distributed search across all terms
                 all_chunks = []
                 for term in search_terms[:10]:  # Use top 10 terms for comprehensive coverage
-                    # Generate embedding for each term
-                    query_embedding = await self._generate_query_embedding(term, request.model)
+                    # Generate embedding for each term (ignore UI model selection, use .env config)
+                    query_embedding = await self._generate_query_embedding(term, None)
 
                     # Search with smaller limit per term to get diverse results
                     chunks = await self.vector_store.search_similar(
@@ -1103,7 +1103,8 @@ class MCPServer:
     
     async def _generate_query_embedding(self, query: str, model: Optional[EmbeddingModel] = None) -> List[float]:
         """Generate embedding for a query."""
-        provider_name = model.value if model else None
+        # Always use .env configuration, ignore UI model selection to prevent dimension mismatch
+        provider_name = None
         
         # Create a dummy chunk for the query
         from ..models import CodeChunk, NodeType
@@ -1122,6 +1123,26 @@ class MCPServer:
         )
         
         return embeddings["query"]
+
+    def _get_actual_embedding_model_used(self) -> str:
+        """Get the actual embedding model being used based on .env configuration."""
+        default_model = config.ai_models.default_embedding_model
+
+        if default_model == "cloud":
+            cloud_model = config.ai_models.default_cloud_model
+            if cloud_model in self.embedding_generator.providers:
+                return cloud_model
+        elif default_model == "local":
+            if "ollama" in self.embedding_generator.providers:
+                return "ollama"
+            elif "sentence_transformer" in self.embedding_generator.providers:
+                return "sentence_transformer"
+
+        # Fallback to first available provider
+        for name in self.embedding_generator.providers.keys():
+            return name
+
+        return "unknown"
 
     def _deduplicate_chunks_by_content(self, chunks_with_scores: List[Tuple]) -> List[Tuple]:
         """
@@ -1868,8 +1889,8 @@ Be specific and technical, as if you're a senior architect explaining the system
             for i, search_term in enumerate(search_terms):
                 await stream_processor.emit_search_progress(stream_id, i, len(search_terms), len(all_chunks))
 
-                # Generate embedding for the search term
-                query_embedding = await self._generate_query_embedding(search_term, request.model)
+                # Generate embedding for the search term (ignore UI model selection, use .env config)
+                query_embedding = await self._generate_query_embedding(search_term, None)
 
                 chunks = await self.vector_store.search_similar(
                     query_embedding=query_embedding,

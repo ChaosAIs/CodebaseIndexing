@@ -95,7 +95,7 @@ const ChatInterface = ({ systemStatus }) => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isMultiAgentAnalysis, setIsMultiAgentAnalysis] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('');
+  // selectedModel removed - using .env configuration only
   const [showSettings, setShowSettings] = useState(false);
   const [includeContext, setIncludeContext] = useState(true);
   const [resultLimit, setResultLimit] = useState(10);
@@ -135,12 +135,7 @@ const ChatInterface = ({ systemStatus }) => {
     loadProjects();
   }, []);
 
-  useEffect(() => {
-    // Set default model when system status loads
-    if (systemStatus?.available_models?.length > 0 && !selectedModel) {
-      setSelectedModel(systemStatus.available_models[0]);
-    }
-  }, [systemStatus, selectedModel]);
+  // Model selection removed - using .env configuration only
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -214,14 +209,14 @@ const ChatInterface = ({ systemStatus }) => {
     const response = await throttleRequest(async () => {
       if (useFlowAnalysis) {
         return await apiService.queryCodebaseFlow(userMessage.content, {
-          model: selectedModel || null,
+          model: null, // Use .env configuration
           limit: resultLimit,
           includeContext: includeContext,
           projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
         });
       } else {
         return await apiService.queryCodebase(userMessage.content, {
-          model: selectedModel || null,
+          model: null, // Use .env configuration
           limit: resultLimit,
           includeContext: includeContext,
           projectIds: selectedProjectIds.length > 0 ? selectedProjectIds : null
@@ -296,7 +291,7 @@ const ChatInterface = ({ systemStatus }) => {
     try {
       // Reduced logging to prevent spam
       // console.log('Making streaming request to /mcp/query/stream');
-      // console.log('Request payload:', { query, model: selectedModel, limit: resultLimit });
+      // console.log('Request payload:', { query, model: null, limit: resultLimit });
 
       // Start streaming query
       console.log('🔥 Making streaming request to /mcp/query/stream');
@@ -307,7 +302,7 @@ const ChatInterface = ({ systemStatus }) => {
         },
         body: JSON.stringify({
           query: query,
-          model: selectedModel || null,
+          model: null, // Use .env configuration
           limit: resultLimit,
           include_context: includeContext,
           project_ids: selectedProjectIds.length > 0 ? selectedProjectIds : null
@@ -1433,22 +1428,8 @@ const ChatInterface = ({ systemStatus }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Embedding Model
-                </label>
-                <select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">Default</option>
-                  {systemStatus?.available_models?.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Embedding Model selection removed - now uses .env configuration only */}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1672,9 +1653,7 @@ const ChatInterface = ({ systemStatus }) => {
               </div>
             )}
           </div>
-          {selectedModel && (
-            <span>Using: {selectedModel}</span>
-          )}
+          {/* Model selection removed - using .env configuration */}
         </div>
       </div>
     </div>

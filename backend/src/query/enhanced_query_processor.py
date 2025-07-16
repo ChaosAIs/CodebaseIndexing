@@ -87,18 +87,16 @@ class EnhancedQueryProcessor:
         self,
         query: str,
         project_ids: Optional[List[str]] = None,
-        limit: int = 10,
-        embedding_model: str = "openai"
+        limit: int = 10
     ) -> CombinedRAGResult:
         """
         Process query using enhanced Embedding + Graph RAG pipeline.
-        
+
         Args:
             query: User's natural language query
             project_ids: Optional project filtering
             limit: Maximum number of results
-            embedding_model: Model to use for embeddings
-            
+
         Returns:
             CombinedRAGResult with ranked results and insights
         """
@@ -110,7 +108,7 @@ class EnhancedQueryProcessor:
         
         # Step 2: Embedding Query - Convert query to embedding and search
         embedding_result = await self.embedding_query(
-            query, project_ids, limit, embedding_model
+            query, project_ids, limit, None  # Use .env configuration
         )
         
         # Step 3: Graph Query - Use entities to query graph
@@ -240,8 +238,7 @@ class EnhancedQueryProcessor:
         self,
         query: str,
         project_ids: Optional[List[str]] = None,
-        limit: int = 10,
-        embedding_model: str = "openai"
+        limit: int = 10
     ) -> EmbeddingRAGResult:
         """
         Perform embedding-based query using vector similarity.
@@ -250,7 +247,6 @@ class EnhancedQueryProcessor:
             query: Query text
             project_ids: Optional project filtering
             limit: Maximum results
-            embedding_model: Embedding model to use
 
         Returns:
             EmbeddingRAGResult with similar chunks and metadata

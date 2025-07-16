@@ -82,8 +82,7 @@ class EnhancedQueryIntegration:
                 combined_result = await self.enhanced_processor.process_query_enhanced(
                     query=query,
                     project_ids=project_ids,
-                    limit=limit,
-                    embedding_model=embedding_model
+                    limit=limit
                 )
                 
                 # Convert enhanced results to standard format
@@ -100,12 +99,12 @@ class EnhancedQueryIntegration:
             else:
                 # Fallback to basic embedding search
                 logger.info(f"Processing query with basic pipeline: {query}")
-                return await self._basic_search_fallback(query, project_ids, limit, embedding_model)
+                return await self._basic_search_fallback(query, project_ids, limit, None)
         
         except Exception as e:
             logger.error(f"Error in enhanced query processing: {e}")
             # Fallback to basic search on error
-            return await self._basic_search_fallback(query, project_ids, limit, embedding_model)
+            return await self._basic_search_fallback(query, project_ids, limit, None)
     
     def _convert_enhanced_results(self, combined_result: CombinedRAGResult) -> List[Tuple[CodeChunk, float]]:
         """Convert enhanced results to standard search result format."""
@@ -136,7 +135,7 @@ class EnhancedQueryIntegration:
         query: str,
         project_ids: Optional[List[str]],
         limit: int,
-        embedding_model: str
+        embedding_model: Optional[str]
     ) -> Tuple[List[Tuple[CodeChunk, float]], Dict[str, Any]]:
         """Fallback to basic embedding search."""
         try:
