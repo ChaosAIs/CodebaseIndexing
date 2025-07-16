@@ -66,7 +66,13 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
             logger.debug(f"OpenAI: API call completed in {api_time:.2f}s")
             logger.debug(f"OpenAI: Generated {len(embeddings)} embeddings with dimension {len(embeddings[0]) if embeddings else 0}")
-            logger.debug(f"OpenAI: Usage - prompt tokens: {getattr(response, 'usage', {}).get('prompt_tokens', 'unknown')}")
+            # Handle usage information safely
+            usage = getattr(response, 'usage', None)
+            if usage:
+                prompt_tokens = getattr(usage, 'prompt_tokens', 'unknown')
+            else:
+                prompt_tokens = 'unknown'
+            logger.debug(f"OpenAI: Usage - prompt tokens: {prompt_tokens}")
 
             return embeddings
 
